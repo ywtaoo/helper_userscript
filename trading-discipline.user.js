@@ -23,6 +23,11 @@
   const API_BASE = 'http://localhost:18080/api';
   const REFRESH_INTERVAL = 30000; // 30s panel refresh
   const RETRY_QUEUE_KEY = 'td_retry_queue';
+  const ACCOUNT_MANAGER_WAIT_TIMEOUT_MS = 60000;
+  const POLL_MIN_INTERVAL_MS = 400;
+  const MAX_RETRY_ATTEMPTS = 3;
+  const STATUS_REQUEST_TIMEOUT_MS = 8000;
+  const EVENT_REQUEST_TIMEOUT_MS = 8000;
 
   // ============================================================
   // 1. DOM Scraper — Orders > Filled Tab (M2)
@@ -44,7 +49,101 @@
 
   // Track seen Order IDs to avoid duplicate submissions
   const seenOrderIds = new Set();
+
   let scraperObserver = null;
+  let accountManagerWaitObserver = null;
+  let accountManagerWaitTimeoutId = null;
+  let scraperIntervalId = null;
+  let scraperStartTimeoutId = null;
+  let pollDelayTimerId = null;
+  let pollInProgress = false;
+  let pollPending = false;
+  let lastPollRunAt = 0;
+
+  let retryIntervalId = null;
+  let statusIntervalId = null;
+  let panelInitTimeoutId = null;
+  let isProcessingRetryQueue = false;
+  let isRefreshingStatus = false;
+  let pendingStatusRefresh = false;
+  let lifecycleCleanupRegistered = false;
+  let cleanedUp = false;
+
+  function clearAccountManagerWaitObserver() {
+    if (accountManagerWaitTimeoutId) {
+      clearTimeout(accountManagerWaitTimeoutId);
+      accountManagerWaitTimeoutId = null;
+    }
+    if (accountManagerWaitObserver) {
+      accountManagerWaitObserver.disconnect();
+      accountManagerWaitObserver = null;
+    }
+  }
+
+  function stopScraper() {
+    if (scraperIntervalId) {
+      clearInterval(scraperIntervalId);
+      scraperIntervalId = null;
+    }
+    if (scraperStartTimeoutId) {
+      clearTimeout(scraperStartTimeoutId);
+      scraperStartTimeoutId = null;
+    }
+    if (pollDelayTimerId) {
+      clearTimeout(pollDelayTimerId);
+      pollDelayTimerId = null;
+    }
+    if (scraperObserver) {
+      scraperObserver.disconnect();
+      scraperObserver = null;
+    }
+    clearAccountManagerWaitObserver();
+    pollInProgress = false;
+    pollPending = false;
+  }
+
+  function cleanupRuntime() {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    pendingStatusRefresh = false;
+    stopScraper();
+    if (retryIntervalId) {
+      clearInterval(retryIntervalId);
+      retryIntervalId = null;
+    }
+    if (statusIntervalId) {
+      clearInterval(statusIntervalId);
+      statusIntervalId = null;
+    }
+    if (panelInitTimeoutId) {
+      clearTimeout(panelInitTimeoutId);
+      panelInitTimeoutId = null;
+    }
+    unbindPanelInteractions();
+  }
+
+  function registerLifecycleCleanup() {
+    if (lifecycleCleanupRegistered) return;
+    lifecycleCleanupRegistered = true;
+
+    window.addEventListener('pagehide', (event) => {
+      if (event.persisted) return;
+      cleanupRuntime();
+    });
+
+    window.addEventListener('pageshow', (event) => {
+      if (!event.persisted || cleanedUp) return;
+      refreshStatus();
+      schedulePoll();
+    });
+
+    window.addEventListener('beforeunload', cleanupRuntime, { once: true });
+  }
+
+  function rememberSeenOrderId(orderId) {
+    if (seenOrderIds.has(orderId)) return;
+    seenOrderIds.add(orderId);
+  }
 
   /**
    * Wait for the Account Manager to appear in the DOM, then call callback.
@@ -53,31 +152,92 @@
     const el = document.querySelector(ACCOUNT_MANAGER_SEL);
     if (el) { callback(el); return; }
 
-    const observer = new MutationObserver(() => {
+    if (!document.body) {
+      document.addEventListener('DOMContentLoaded', () => waitForAccountManager(callback), { once: true });
+      return;
+    }
+
+    let done = false;
+    const finish = (found) => {
+      if (done) return;
+      done = true;
+      clearAccountManagerWaitObserver();
+      if (found) callback(found);
+    };
+
+    clearAccountManagerWaitObserver();
+    accountManagerWaitObserver = new MutationObserver(() => {
       const found = document.querySelector(ACCOUNT_MANAGER_SEL);
-      if (found) { observer.disconnect(); callback(found); }
+      if (found) finish(found);
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+    accountManagerWaitObserver.observe(document.body, { childList: true, subtree: true });
+    accountManagerWaitTimeoutId = setTimeout(() => {
+      console.warn('[TD] Account Manager wait timeout, skip attaching scraper observer');
+      finish(null);
+    }, ACCOUNT_MANAGER_WAIT_TIMEOUT_MS);
+  }
+
+  function runScheduledPoll() {
+    if (pollInProgress) {
+      pollPending = true;
+      return;
+    }
+
+    pollInProgress = true;
+    lastPollRunAt = Date.now();
+    try {
+      pollFilledOrders();
+    } finally {
+      pollInProgress = false;
+      if (pollPending) {
+        pollPending = false;
+        schedulePoll();
+      }
+    }
+  }
+
+  function schedulePoll() {
+    if (cleanedUp) return;
+
+    if (pollInProgress) {
+      pollPending = true;
+      return;
+    }
+
+    const elapsed = Date.now() - lastPollRunAt;
+    if (elapsed >= POLL_MIN_INTERVAL_MS) {
+      runScheduledPoll();
+      return;
+    }
+
+    if (pollDelayTimerId) return;
+    pollDelayTimerId = setTimeout(() => {
+      pollDelayTimerId = null;
+      runScheduledPoll();
+    }, POLL_MIN_INTERVAL_MS - elapsed);
   }
 
   /**
    * Start the DOM scraper: interval polling + MutationObserver for fast detection.
    */
   function startScraper() {
+    if (cleanedUp || scraperIntervalId) return;
     console.log('[TD] 🔍 DOM scraper starting — watching Orders > Filled table');
 
     // Interval-based polling as the primary mechanism
-    setInterval(pollFilledOrders, SCRAPE_INTERVAL_MS);
+    scraperIntervalId = setInterval(schedulePoll, SCRAPE_INTERVAL_MS);
 
     // MutationObserver for faster detection when new rows are added
     waitForAccountManager((container) => {
-      scraperObserver = new MutationObserver(pollFilledOrders);
+      if (cleanedUp) return;
+      if (scraperObserver) scraperObserver.disconnect();
+      scraperObserver = new MutationObserver(schedulePoll);
       scraperObserver.observe(container, { childList: true, subtree: true });
       console.log('[TD] 🔍 MutationObserver attached to Account Manager');
     });
 
     // Immediate first poll
-    pollFilledOrders();
+    schedulePoll();
   }
 
   /**
@@ -96,7 +256,7 @@
 
       const fillData = scrapeOrderRow(row, orderId);
       if (fillData) {
-        seenOrderIds.add(orderId);
+        rememberSeenOrderId(orderId);
         console.log('[TD] 📌 New filled order detected:', fillData);
         forwardToBackend(fillData);
       }
@@ -174,6 +334,7 @@
       method: 'POST',
       url: `${API_BASE}/events`,
       data: JSON.stringify(fillData),
+      timeout: EVENT_REQUEST_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json' },
       onload: (res) => {
         if (res.status >= 200 && res.status < 300) {
@@ -188,6 +349,10 @@
         console.error('[TD] ❌ Backend unreachable:', err);
         queueForRetry(fillData);
       },
+      ontimeout: () => {
+        console.error('[TD] ❌ Backend timeout');
+        queueForRetry(fillData);
+      },
     });
   }
 
@@ -195,54 +360,122 @@
   // 2. Retry Queue (降级处理)
   // ============================================================
 
-  function queueForRetry(fillData) {
+  function loadRetryQueue() {
     try {
       const queue = JSON.parse(localStorage.getItem(RETRY_QUEUE_KEY) || '[]');
-      queue.push({ data: fillData, attempts: 0, timestamp: Date.now() });
-      localStorage.setItem(RETRY_QUEUE_KEY, JSON.stringify(queue));
+      return Array.isArray(queue) ? queue : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveRetryQueue(queue) {
+    localStorage.setItem(RETRY_QUEUE_KEY, JSON.stringify(queue));
+  }
+
+  function generateRetryId() {
+    return `${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+  }
+
+  function buildLegacyRetryId(item) {
+    const safeItem = item && typeof item === 'object' ? item : {};
+    const ts = Number(safeItem.timestamp) || 0;
+    const attempts = Number(safeItem.attempts) || 0;
+    const fillId = safeItem.data && safeItem.data.fill_id !== undefined
+      ? safeItem.data.fill_id
+      : 'na';
+    return `legacy_${ts}_${fillId}_${attempts}`;
+  }
+
+  function normalizeRetryItem(item) {
+    const safeItem = item && typeof item === 'object' ? item : {};
+    return {
+      retry_id: typeof safeItem.retry_id === 'string' && safeItem.retry_id
+        ? safeItem.retry_id
+        : buildLegacyRetryId(safeItem),
+      data: safeItem.data,
+      attempts: Number(safeItem.attempts) || 0,
+      timestamp: Number(safeItem.timestamp) || Date.now(),
+    };
+  }
+
+  function postEvent(payload) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: `${API_BASE}/events`,
+        data: JSON.stringify(payload),
+        timeout: EVENT_REQUEST_TIMEOUT_MS,
+        headers: { 'Content-Type': 'application/json' },
+        onload: resolve,
+        onerror: reject,
+        ontimeout: () => reject(new Error('timeout')),
+      });
+    });
+  }
+
+  function queueForRetry(fillData) {
+    try {
+      const queue = loadRetryQueue();
+      queue.push({
+        retry_id: generateRetryId(),
+        data: fillData,
+        attempts: 0,
+        timestamp: Date.now(),
+      });
+      saveRetryQueue(queue);
       console.log(`[TD] Queued for retry (${queue.length} pending)`);
     } catch (e) {
       console.error('[TD] Failed to queue for retry:', e);
     }
   }
 
-  function processRetryQueue() {
-    try {
-      const queue = JSON.parse(localStorage.getItem(RETRY_QUEUE_KEY) || '[]');
-      if (queue.length === 0) return;
+  async function processRetryQueue() {
+    if (isProcessingRetryQueue) return;
+    isProcessingRetryQueue = true;
 
-      const remaining = [];
-      for (const item of queue) {
-        if (item.attempts >= 3) {
+    try {
+      const queueSnapshot = loadRetryQueue().map(normalizeRetryItem);
+      if (queueSnapshot.length === 0) return;
+
+      const snapshotIds = new Set(queueSnapshot.map(item => item.retry_id));
+      const remainingFromSnapshot = [];
+
+      for (const item of queueSnapshot) {
+        if (item.attempts >= MAX_RETRY_ATTEMPTS) {
           console.warn('[TD] Dead letter — max retries exceeded:', item.data);
           continue;
         }
+        if (!item.data) {
+          console.warn('[TD] Dead letter — invalid retry payload:', item);
+          continue;
+        }
 
-        item.attempts++;
-        GM_xmlhttpRequest({
-          method: 'POST',
-          url: `${API_BASE}/events`,
-          data: JSON.stringify(item.data),
-          headers: { 'Content-Type': 'application/json' },
-          onload: (res) => {
-            if (res.status >= 200 && res.status < 300) {
-              console.log('[TD] ✅ Retry successful');
-            }
-          },
-          onerror: () => {
-            remaining.push(item);
-          },
-        });
+        const nextItem = { ...item, attempts: item.attempts + 1 };
+        try {
+          const res = await postEvent(item.data);
+          if (res.status >= 200 && res.status < 300) {
+            console.log('[TD] ✅ Retry successful');
+            continue;
+          }
+          remainingFromSnapshot.push(nextItem);
+        } catch {
+          remainingFromSnapshot.push(nextItem);
+        }
       }
 
-      localStorage.setItem(RETRY_QUEUE_KEY, JSON.stringify(remaining));
+      const latestQueue = loadRetryQueue().map(normalizeRetryItem);
+      const concurrentItems = latestQueue.filter(item => !snapshotIds.has(item.retry_id));
+      saveRetryQueue([...remainingFromSnapshot, ...concurrentItems]);
     } catch (e) {
       console.error('[TD] Retry queue error:', e);
+    } finally {
+      isProcessingRetryQueue = false;
     }
   }
 
   // Retry every 60s
-  setInterval(processRetryQueue, 60000);
+  retryIntervalId = setInterval(processRetryQueue, 60000);
 
   // ============================================================
   // 3. Panel UI (M3)
@@ -253,18 +486,31 @@
   let lastUpdateTime = null;
   let isCollapsed = localStorage.getItem('td_panel_collapsed') === 'true';
   let panelPos = JSON.parse(localStorage.getItem('td_panel_pos') || '{"top":"80px","right":"80px","left":""}');
+  let panelInteractionsBound = false;
+  const panelDragState = {
+    isDragging: false,
+    startX: 0,
+    startY: 0,
+    initialLeft: 0,
+    initialTop: 0,
+  };
 
   function initPanel() {
     // Wait for page to be ready
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', createPanel);
+      document.addEventListener('DOMContentLoaded', createPanel, { once: true });
     } else {
       // Small delay to let TradingView UI settle
-      setTimeout(createPanel, 2000);
+      panelInitTimeoutId = setTimeout(() => {
+        panelInitTimeoutId = null;
+        createPanel();
+      }, 2000);
     }
   }
 
   function createPanel() {
+    if (cleanedUp || panelEl) return;
+
     // Inject styles
     GM_addStyle(`
       #td-panel {
@@ -949,13 +1195,13 @@
     panelEl.innerHTML = buildPanelHTML(null);
     document.body.appendChild(panelEl);
 
-    setupPanelInteractions();
+    bindPanelInteractionsOnce();
 
     // Initial fetch
     refreshStatus();
 
     // Set up polling
-    setInterval(refreshStatus, REFRESH_INTERVAL);
+    statusIntervalId = setInterval(refreshStatus, REFRESH_INTERVAL);
 
     console.log('[TD] 📊 Discipline panel initialized');
   }
@@ -1057,71 +1303,88 @@
     `;
   }
 
-  function setupPanelInteractions() {
+  function onPanelClick(e) {
     if (!panelEl) return;
 
-    // Collapse toggle
-    const toggleBtn = panelEl.querySelector('.td-collapse-btn');
-    if (toggleBtn) {
-      toggleBtn.addEventListener('click', (e) => {
-        e.stopPropagation(); // Prevent drag
-        isCollapsed = !isCollapsed;
-        localStorage.setItem('td_panel_collapsed', isCollapsed);
-        if (isCollapsed) {
-          panelEl.classList.add('td-collapsed');
-          toggleBtn.textContent = '➕';
-        } else {
-          panelEl.classList.remove('td-collapsed');
-          toggleBtn.textContent = '➖';
-        }
-      });
+    const toggleBtn = e.target.closest('.td-collapse-btn');
+    if (toggleBtn && panelEl.contains(toggleBtn)) {
+      e.stopPropagation();
+      isCollapsed = !isCollapsed;
+      localStorage.setItem('td_panel_collapsed', isCollapsed);
+      if (isCollapsed) {
+        panelEl.classList.add('td-collapsed');
+        toggleBtn.textContent = '➕';
+      } else {
+        panelEl.classList.remove('td-collapsed');
+        toggleBtn.textContent = '➖';
+      }
+      return;
     }
 
-    // Drag functionality
-    const header = panelEl.querySelector('.td-header');
-    if (!header) return;
+    const annoBtn = e.target.closest('#td-anno-open');
+    if (annoBtn && panelEl.contains(annoBtn)) {
+      e.preventDefault();
+      openAnnotationModal();
+    }
+  }
 
-    let isDragging = false;
-    let startX, startY, initialLeft, initialTop;
+  function onPanelMouseDown(e) {
+    if (!panelEl || e.button !== 0) return;
+    const header = e.target.closest('.td-header');
+    if (!header || !panelEl.contains(header)) return;
+    if (e.target.closest('.td-header-actions')) return;
 
-    header.addEventListener('mousedown', (e) => {
-      // Don't drag if clicking buttons
-      if (e.target.closest('.td-header-actions')) return;
+    panelDragState.isDragging = true;
+    panelDragState.startX = e.clientX;
+    panelDragState.startY = e.clientY;
 
-      isDragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
+    const rect = panelEl.getBoundingClientRect();
+    panelDragState.initialLeft = rect.left;
+    panelDragState.initialTop = rect.top;
 
-      const rect = panelEl.getBoundingClientRect();
-      initialLeft = rect.left;
-      initialTop = rect.top;
+    // Clear right positioning to favor left based absolute positioning during drag
+    panelEl.style.right = 'auto';
+    e.preventDefault();
+  }
 
-      // Clear right positioning to favor left based absolute positioning during drag
-      panelEl.style.right = 'auto';
-    });
+  function onPanelMouseMove(e) {
+    if (!panelEl || !panelDragState.isDragging) return;
+    const dx = e.clientX - panelDragState.startX;
+    const dy = e.clientY - panelDragState.startY;
+    panelEl.style.left = `${panelDragState.initialLeft + dx}px`;
+    panelEl.style.top = `${panelDragState.initialTop + dy}px`;
+  }
 
-    document.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
+  function onPanelMouseUp() {
+    if (!panelEl || !panelDragState.isDragging) return;
+    panelDragState.isDragging = false;
+    panelPos = {
+      top: panelEl.style.top,
+      left: panelEl.style.left,
+      right: '',
+    };
+    localStorage.setItem('td_panel_pos', JSON.stringify(panelPos));
+  }
 
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
+  function bindPanelInteractionsOnce() {
+    if (!panelEl || panelInteractionsBound) return;
+    panelEl.addEventListener('click', onPanelClick);
+    panelEl.addEventListener('mousedown', onPanelMouseDown);
+    document.addEventListener('mousemove', onPanelMouseMove);
+    document.addEventListener('mouseup', onPanelMouseUp);
+    panelInteractionsBound = true;
+  }
 
-      panelEl.style.left = `${initialLeft + dx}px`;
-      panelEl.style.top = `${initialTop + dy}px`;
-    });
-
-    document.addEventListener('mouseup', () => {
-      if (isDragging) {
-        isDragging = false;
-        // Save pos
-        panelPos = {
-          top: panelEl.style.top,
-          left: panelEl.style.left,
-          right: ''
-        };
-        localStorage.setItem('td_panel_pos', JSON.stringify(panelPos));
-      }
-    });
+  function unbindPanelInteractions() {
+    if (!panelInteractionsBound) return;
+    if (panelEl) {
+      panelEl.removeEventListener('click', onPanelClick);
+      panelEl.removeEventListener('mousedown', onPanelMouseDown);
+    }
+    document.removeEventListener('mousemove', onPanelMouseMove);
+    document.removeEventListener('mouseup', onPanelMouseUp);
+    panelDragState.isDragging = false;
+    panelInteractionsBound = false;
   }
 
   function isValidStatusPayload(status) {
@@ -1142,17 +1405,36 @@
   }
 
   function refreshStatus() {
+    if (cleanedUp) return;
+    if (isRefreshingStatus) {
+      pendingStatusRefresh = true;
+      return;
+    }
+    isRefreshingStatus = true;
+    let finalized = false;
+
+    const finalize = () => {
+      if (finalized) return;
+      finalized = true;
+      isRefreshingStatus = false;
+      if (pendingStatusRefresh && !cleanedUp) {
+        pendingStatusRefresh = false;
+        refreshStatus();
+      }
+    };
+
     GM_xmlhttpRequest({
       method: 'GET',
       url: `${API_BASE}/status`,
+      timeout: STATUS_REQUEST_TIMEOUT_MS,
       onload: (res) => {
-        if (res.status < 200 || res.status >= 300) {
-          console.error('[TD] Status request failed:', res.status, res.responseText);
-          showDegraded(`HTTP ${res.status}`);
-          return;
-        }
-
         try {
+          if (res.status < 200 || res.status >= 300) {
+            console.error('[TD] Status request failed:', res.status, res.responseText);
+            showDegraded(`HTTP ${res.status}`);
+            return;
+          }
+
           const status = JSON.parse(res.responseText);
 
           if (!isValidStatusPayload(status)) {
@@ -1166,8 +1448,6 @@
 
           if (panelEl) {
             panelEl.innerHTML = buildPanelHTML(status);
-            setupPanelInteractions(); // Re-bind events after innerHTML replace
-            setupAnnoBtn();
 
             // Golden border toggle
             if (status.trade_limit && status.trade_limit.golden_complete) {
@@ -1187,10 +1467,23 @@
         } catch (e) {
           console.error('[TD] Failed to handle status response:', e, res.responseText);
           showDegraded('状态解析失败');
+        } finally {
+          finalize();
         }
       },
       onerror: () => {
-        showDegraded('后端不可达');
+        try {
+          showDegraded('后端不可达');
+        } finally {
+          finalize();
+        }
+      },
+      ontimeout: () => {
+        try {
+          showDegraded('状态请求超时');
+        } finally {
+          finalize();
+        }
       },
     });
   }
@@ -1262,30 +1555,33 @@
 
     document.body.appendChild(overlay);
 
-    // Cancel button — immediately available
-    document.getElementById('td-risk-cancel').addEventListener('click', () => {
-      overlay.remove();
-    });
-
-    // Confirm button — 5 second delay
-    const confirmBtn = document.getElementById('td-risk-confirm');
+    const cancelBtn = overlay.querySelector('#td-risk-cancel');
+    const confirmBtn = overlay.querySelector('#td-risk-confirm');
     let countdown = 5;
+    let timerId = null;
 
-    const timer = setInterval(() => {
-      countdown--;
-      if (countdown > 0) {
-        confirmBtn.textContent = `确认继续 (${countdown}s)`;
-      } else {
-        clearInterval(timer);
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = '确认继续';
+    const cleanup = () => {
+      if (timerId) {
+        clearInterval(timerId);
+        timerId = null;
       }
-    }, 1000);
+      cancelBtn.removeEventListener('click', onCancel);
+      confirmBtn.removeEventListener('click', onConfirm);
+    };
 
-    confirmBtn.addEventListener('click', () => {
+    const closeOverlay = () => {
+      cleanup();
+      overlay.remove();
+    };
+
+    const onCancel = () => {
+      closeOverlay();
+    };
+
+    const onConfirm = () => {
       if (confirmBtn.disabled) return;
       riskAcknowledged = true;
-      overlay.remove();
+      closeOverlay();
 
       // Notify backend
       GM_xmlhttpRequest({
@@ -1300,7 +1596,24 @@
         riskAcknowledged = false;
         console.log('[TD] Risk modal cooldown completed');
       }, 30 * 60 * 1000); // 30 minutes cooldown (was 1 min)
-    });
+    };
+
+    cancelBtn.addEventListener('click', onCancel);
+    confirmBtn.addEventListener('click', onConfirm);
+
+    timerId = setInterval(() => {
+      countdown--;
+      if (countdown > 0) {
+        confirmBtn.textContent = `确认继续 (${countdown}s)`;
+      } else {
+        if (timerId) {
+          clearInterval(timerId);
+          timerId = null;
+        }
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = '确认继续';
+      }
+    }, 1000);
   }
 
   // ============================================================
@@ -1342,46 +1655,68 @@
 
     document.body.appendChild(overlay);
 
-    // Cancel button
-    document.getElementById('td-limit-cancel').addEventListener('click', () => {
-      overlay.remove();
-    });
-
-    // Confirm button with countdown
-    const confirmBtn = document.getElementById('td-limit-confirm');
+    const cancelBtn = overlay.querySelector('#td-limit-cancel');
+    const confirmBtn = overlay.querySelector('#td-limit-confirm');
+    const reasonEl = overlay.querySelector('#td-limit-reason');
     let remaining = countdown;
+    let countdownDone = false;
+    let timerId = null;
 
-    const timer = setInterval(() => {
+    const updateConfirmState = () => {
+      if (!countdownDone) {
+        confirmBtn.disabled = true;
+        return;
+      }
+      if (isRed) {
+        confirmBtn.disabled = !reasonEl || reasonEl.value.trim().length === 0;
+        return;
+      }
+      confirmBtn.disabled = false;
+    };
+
+    const cleanup = () => {
+      if (timerId) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+      cancelBtn.removeEventListener('click', onCancel);
+      confirmBtn.removeEventListener('click', onConfirm);
+      if (reasonEl) reasonEl.removeEventListener('input', updateConfirmState);
+    };
+
+    const closeOverlay = () => {
+      cleanup();
+      overlay.remove();
+    };
+
+    const onCancel = () => {
+      closeOverlay();
+    };
+
+    const onConfirm = () => {
+      if (confirmBtn.disabled) return;
+      lastWarnedZone = zone;
+      closeOverlay();
+    };
+
+    cancelBtn.addEventListener('click', onCancel);
+    confirmBtn.addEventListener('click', onConfirm);
+    if (reasonEl) reasonEl.addEventListener('input', updateConfirmState);
+
+    timerId = setInterval(() => {
       remaining--;
       if (remaining > 0) {
         confirmBtn.textContent = `确认继续 (${remaining}s)`;
       } else {
-        clearInterval(timer);
-        // For red zone, only enable if reason is provided
-        if (isRed) {
-          const reasonEl = document.getElementById('td-limit-reason');
-          if (reasonEl && reasonEl.value.trim().length > 0) {
-            confirmBtn.disabled = false;
-          }
-          confirmBtn.textContent = '确认继续';
-          // Listen for input changes to enable/disable
-          if (reasonEl) {
-            reasonEl.addEventListener('input', () => {
-              confirmBtn.disabled = reasonEl.value.trim().length === 0;
-            });
-          }
-        } else {
-          confirmBtn.disabled = false;
-          confirmBtn.textContent = '确认继续';
+        if (timerId) {
+          clearInterval(timerId);
+          timerId = null;
         }
+        countdownDone = true;
+        confirmBtn.textContent = '确认继续';
+        updateConfirmState();
       }
     }, 1000);
-
-    confirmBtn.addEventListener('click', () => {
-      if (confirmBtn.disabled) return;
-      lastWarnedZone = zone;
-      overlay.remove();
-    });
   }
 
   /**
@@ -1431,13 +1766,6 @@
       return '<button class="td-anno-btn" id="td-anno-open">📝 标注</button>';
     }
     return `<button class="td-anno-btn" id="td-anno-open">📝 标注 <span class="td-anno-badge">${pending}</span></button>`;
-  }
-
-  function setupAnnoBtn() {
-    const btn = document.getElementById('td-anno-open');
-    if (btn) {
-      btn.addEventListener('click', openAnnotationModal);
-    }
   }
 
   function openAnnotationModal() {
@@ -1831,10 +2159,11 @@
   // Initialize
   // ============================================================
 
+  registerLifecycleCleanup();
   initPanel();
 
   // Start DOM scraper after page settles (TV renders Account Manager lazily)
-  setTimeout(startScraper, 3000);
+  scraperStartTimeoutId = setTimeout(startScraper, 3000);
 
   console.log('[TD] 🚀 Trading Discipline System initialized');
 
