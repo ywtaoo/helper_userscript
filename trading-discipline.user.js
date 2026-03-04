@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.2.1
+// @version      0.2.2
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC 日内交易纪律辅助系统 — DOM 抓取 + 状态面板 + 风险提醒
