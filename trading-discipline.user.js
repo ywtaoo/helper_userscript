@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.2.3
+// @version      0.2.4
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC 日内交易纪律辅助系统 — DOM 抓取 + 状态面板 + 风险提醒
@@ -47,9 +47,9 @@
   const ACCOUNT_MANAGER_SEL = '.accountManager-vCXUCd2i';
   const SCRAPE_INTERVAL_MS  = 5000; // poll every 5s
 
-  // Track seen Order IDs to avoid duplicate submissions
-  const seenOrderIds = new Set();
-  const pendingOrderIds = new Set();
+  // Track the last submitted snapshot per order so cumulative fills can update in place.
+  const sentOrderSnapshots = new Map();
+  const pendingOrderSnapshots = new Map();
   const eventSendQueue = [];
 
   let scraperObserver = null;
@@ -143,9 +143,40 @@
     window.addEventListener('beforeunload', cleanupRuntime, { once: true });
   }
 
-  function rememberSeenOrderId(orderId) {
-    if (seenOrderIds.has(orderId)) return;
-    seenOrderIds.add(orderId);
+  function buildOrderSnapshotKey(fillData) {
+    if (!fillData) return '';
+    return [
+      fillData.fill_id,
+      fillData.symbol || '',
+      fillData.action || '',
+      Number(fillData.qty) || 0,
+      Number(fillData.price) || 0,
+      fillData.timestamp || '',
+    ].join('|');
+  }
+
+  function rememberSentOrderSnapshot(orderId, snapshotKey) {
+    if (!orderId || !snapshotKey) return;
+    sentOrderSnapshots.set(orderId, snapshotKey);
+  }
+
+  function setPendingOrderSnapshot(orderId, snapshotKey) {
+    if (!orderId || !snapshotKey) return;
+    pendingOrderSnapshots.set(orderId, snapshotKey);
+  }
+
+  function isOrderSnapshotSent(orderId, snapshotKey) {
+    return !!orderId && !!snapshotKey && sentOrderSnapshots.get(orderId) === snapshotKey;
+  }
+
+  function isOrderSnapshotPending(orderId, snapshotKey) {
+    return !!orderId && !!snapshotKey && pendingOrderSnapshots.get(orderId) === snapshotKey;
+  }
+
+  function clearPendingOrderSnapshot(orderId, snapshotKey) {
+    if (!orderId) return;
+    if (snapshotKey && pendingOrderSnapshots.get(orderId) !== snapshotKey) return;
+    pendingOrderSnapshots.delete(orderId);
   }
 
   function compareQueuedFills(a, b) {
@@ -189,8 +220,8 @@
           const res = await sendEventPayload(item.fillData);
           if (res.status >= 200 && res.status < 300) {
             if (item.orderId) {
-              pendingOrderIds.delete(item.orderId);
-              rememberSeenOrderId(item.orderId);
+              clearPendingOrderSnapshot(item.orderId, item.snapshotKey);
+              rememberSentOrderSnapshot(item.orderId, item.snapshotKey);
             }
             console.log('[TD] ✅ Fill event sent to backend:', item.fillData.fill_id);
             refreshStatus();
@@ -324,11 +355,15 @@
     const newRows = [];
     for (const row of rows) {
       const orderId = row.dataset.rowId;
-      if (!orderId || seenOrderIds.has(orderId) || pendingOrderIds.has(orderId)) continue;
+      if (!orderId) continue;
 
       const fillData = scrapeOrderRow(row, orderId);
       if (fillData) {
-        newRows.push({ orderId, fillData });
+        const snapshotKey = buildOrderSnapshotKey(fillData);
+        if (!snapshotKey || isOrderSnapshotSent(orderId, snapshotKey) || isOrderSnapshotPending(orderId, snapshotKey)) {
+          continue;
+        }
+        newRows.push({ orderId, fillData, snapshotKey });
       }
     }
 
@@ -336,9 +371,9 @@
 
     newRows.sort(compareQueuedFills);
     for (const item of newRows) {
-      pendingOrderIds.add(item.orderId);
+      setPendingOrderSnapshot(item.orderId, item.snapshotKey);
       console.log('[TD] 📌 New filled order detected:', item.fillData);
-      forwardToBackend(item.fillData, item.orderId);
+      forwardToBackend(item.fillData, item.orderId, item.snapshotKey);
     }
   }
 
@@ -408,13 +443,14 @@
   /**
    * Forward a normalized fill payload to the local backend.
    */
-  function forwardToBackend(fillData, orderId) {
+  function forwardToBackend(fillData, orderId, snapshotKey) {
     enqueueEventSend({
       fillData,
       orderId,
+      snapshotKey,
       onFailure: (error) => {
         console.error('[TD] ❌ Backend rejected/unreachable:', error);
-        queueForRetry(fillData, orderId);
+        queueForRetry(fillData, orderId, snapshotKey);
       },
     });
   }
@@ -452,27 +488,36 @@
 
   function normalizeRetryItem(item) {
     const safeItem = item && typeof item === 'object' ? item : {};
+    const snapshotKey = typeof safeItem.snapshot_key === 'string' && safeItem.snapshot_key
+      ? safeItem.snapshot_key
+      : buildOrderSnapshotKey(safeItem.data);
     return {
       retry_id: typeof safeItem.retry_id === 'string' && safeItem.retry_id
         ? safeItem.retry_id
         : buildLegacyRetryId(safeItem),
       data: safeItem.data,
       order_id: typeof safeItem.order_id === 'string' ? safeItem.order_id : '',
+      snapshot_key: snapshotKey,
       attempts: Number(safeItem.attempts) || 0,
       timestamp: Number(safeItem.timestamp) || Date.now(),
     };
   }
 
-  function queueForRetry(fillData, orderId) {
+  function queueForRetry(fillData, orderId, snapshotKey) {
     try {
       const queue = loadRetryQueue();
-      const fillId = fillData && fillData.fill_id;
-      const alreadyQueued = queue.some((item) => item && item.data && item.data.fill_id === fillId);
+      const normalizedSnapshotKey = snapshotKey || buildOrderSnapshotKey(fillData);
+      const alreadyQueued = queue.some((item) => {
+        const normalized = normalizeRetryItem(item);
+        return normalized.order_id === (orderId || '') &&
+          normalized.snapshot_key === normalizedSnapshotKey;
+      });
       if (alreadyQueued) return;
       queue.push({
         retry_id: generateRetryId(),
         data: fillData,
         order_id: orderId || '',
+        snapshot_key: normalizedSnapshotKey,
         attempts: 0,
         timestamp: Date.now(),
       });
@@ -497,12 +542,12 @@
       for (const item of queueSnapshot) {
         if (item.attempts >= MAX_RETRY_ATTEMPTS) {
           console.warn('[TD] Dead letter — max retries exceeded:', item.data);
-          if (item.order_id) pendingOrderIds.delete(item.order_id);
+          if (item.order_id) clearPendingOrderSnapshot(item.order_id, item.snapshot_key);
           continue;
         }
         if (!item.data) {
           console.warn('[TD] Dead letter — invalid retry payload:', item);
-          if (item.order_id) pendingOrderIds.delete(item.order_id);
+          if (item.order_id) clearPendingOrderSnapshot(item.order_id, item.snapshot_key);
           continue;
         }
 
@@ -512,6 +557,7 @@
             enqueueEventSend({
               fillData: item.data,
               orderId: item.order_id || '',
+              snapshotKey: item.snapshot_key,
               onSuccess: () => resolve(true),
               onFailure: () => resolve(false),
             });
