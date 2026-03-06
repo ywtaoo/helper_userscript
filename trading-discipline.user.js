@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.2.2
+// @version      0.2.3
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC 日内交易纪律辅助系统 — DOM 抓取 + 状态面板 + 风险提醒
@@ -49,6 +49,8 @@
 
   // Track seen Order IDs to avoid duplicate submissions
   const seenOrderIds = new Set();
+  const pendingOrderIds = new Set();
+  const eventSendQueue = [];
 
   let scraperObserver = null;
   let accountManagerWaitObserver = null;
@@ -64,6 +66,7 @@
   let statusIntervalId = null;
   let panelInitTimeoutId = null;
   let isProcessingRetryQueue = false;
+  let isSendingEvent = false;
   let isRefreshingStatus = false;
   let pendingStatusRefresh = false;
   let lifecycleCleanupRegistered = false;
@@ -143,6 +146,74 @@
   function rememberSeenOrderId(orderId) {
     if (seenOrderIds.has(orderId)) return;
     seenOrderIds.add(orderId);
+  }
+
+  function compareQueuedFills(a, b) {
+    if (a.fillData.timestamp !== b.fillData.timestamp) {
+      return a.fillData.timestamp.localeCompare(b.fillData.timestamp);
+    }
+    return a.fillData.fill_id - b.fillData.fill_id;
+  }
+
+  function sendEventPayload(payload) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: `${API_BASE}/events`,
+        data: JSON.stringify(payload),
+        timeout: EVENT_REQUEST_TIMEOUT_MS,
+        headers: { 'Content-Type': 'application/json' },
+        onload: resolve,
+        onerror: reject,
+        ontimeout: () => reject(new Error('timeout')),
+      });
+    });
+  }
+
+  function enqueueEventSend(item) {
+    eventSendQueue.push(item);
+    eventSendQueue.sort(compareQueuedFills);
+    void drainEventSendQueue();
+  }
+
+  async function drainEventSendQueue() {
+    if (isSendingEvent) return;
+    isSendingEvent = true;
+
+    try {
+      while (eventSendQueue.length > 0) {
+        const item = eventSendQueue.shift();
+        if (!item || !item.fillData) continue;
+
+        try {
+          const res = await sendEventPayload(item.fillData);
+          if (res.status >= 200 && res.status < 300) {
+            if (item.orderId) {
+              pendingOrderIds.delete(item.orderId);
+              rememberSeenOrderId(item.orderId);
+            }
+            console.log('[TD] ✅ Fill event sent to backend:', item.fillData.fill_id);
+            refreshStatus();
+            if (item.onSuccess) item.onSuccess();
+            continue;
+          }
+
+          if (item.onFailure) {
+            item.onFailure(res);
+          } else {
+            throw new Error(`HTTP ${res.status}`);
+          }
+        } catch (error) {
+          if (item.onFailure) {
+            item.onFailure(error);
+          } else {
+            console.error('[TD] ❌ Failed to send event:', error);
+          }
+        }
+      }
+    } finally {
+      isSendingEvent = false;
+    }
   }
 
   /**
@@ -250,16 +321,24 @@
     const rows = table.querySelectorAll('tbody tr.ka-row');
     if (!rows.length) return;
 
+    const newRows = [];
     for (const row of rows) {
       const orderId = row.dataset.rowId;
-      if (!orderId || seenOrderIds.has(orderId)) continue;
+      if (!orderId || seenOrderIds.has(orderId) || pendingOrderIds.has(orderId)) continue;
 
       const fillData = scrapeOrderRow(row, orderId);
       if (fillData) {
-        rememberSeenOrderId(orderId);
-        console.log('[TD] 📌 New filled order detected:', fillData);
-        forwardToBackend(fillData);
+        newRows.push({ orderId, fillData });
       }
+    }
+
+    if (newRows.length === 0) return;
+
+    newRows.sort(compareQueuedFills);
+    for (const item of newRows) {
+      pendingOrderIds.add(item.orderId);
+      console.log('[TD] 📌 New filled order detected:', item.fillData);
+      forwardToBackend(item.fillData, item.orderId);
     }
   }
 
@@ -329,29 +408,13 @@
   /**
    * Forward a normalized fill payload to the local backend.
    */
-  function forwardToBackend(fillData) {
-    GM_xmlhttpRequest({
-      method: 'POST',
-      url: `${API_BASE}/events`,
-      data: JSON.stringify(fillData),
-      timeout: EVENT_REQUEST_TIMEOUT_MS,
-      headers: { 'Content-Type': 'application/json' },
-      onload: (res) => {
-        if (res.status >= 200 && res.status < 300) {
-          console.log('[TD] ✅ Fill event sent to backend:', fillData.fill_id);
-          refreshStatus();
-        } else {
-          console.error('[TD] ❌ Backend rejected:', res.responseText);
-          queueForRetry(fillData);
-        }
-      },
-      onerror: (err) => {
-        console.error('[TD] ❌ Backend unreachable:', err);
-        queueForRetry(fillData);
-      },
-      ontimeout: () => {
-        console.error('[TD] ❌ Backend timeout');
-        queueForRetry(fillData);
+  function forwardToBackend(fillData, orderId) {
+    enqueueEventSend({
+      fillData,
+      orderId,
+      onFailure: (error) => {
+        console.error('[TD] ❌ Backend rejected/unreachable:', error);
+        queueForRetry(fillData, orderId);
       },
     });
   }
@@ -394,32 +457,22 @@
         ? safeItem.retry_id
         : buildLegacyRetryId(safeItem),
       data: safeItem.data,
+      order_id: typeof safeItem.order_id === 'string' ? safeItem.order_id : '',
       attempts: Number(safeItem.attempts) || 0,
       timestamp: Number(safeItem.timestamp) || Date.now(),
     };
   }
 
-  function postEvent(payload) {
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method: 'POST',
-        url: `${API_BASE}/events`,
-        data: JSON.stringify(payload),
-        timeout: EVENT_REQUEST_TIMEOUT_MS,
-        headers: { 'Content-Type': 'application/json' },
-        onload: resolve,
-        onerror: reject,
-        ontimeout: () => reject(new Error('timeout')),
-      });
-    });
-  }
-
-  function queueForRetry(fillData) {
+  function queueForRetry(fillData, orderId) {
     try {
       const queue = loadRetryQueue();
+      const fillId = fillData && fillData.fill_id;
+      const alreadyQueued = queue.some((item) => item && item.data && item.data.fill_id === fillId);
+      if (alreadyQueued) return;
       queue.push({
         retry_id: generateRetryId(),
         data: fillData,
+        order_id: orderId || '',
         attempts: 0,
         timestamp: Date.now(),
       });
@@ -444,17 +497,26 @@
       for (const item of queueSnapshot) {
         if (item.attempts >= MAX_RETRY_ATTEMPTS) {
           console.warn('[TD] Dead letter — max retries exceeded:', item.data);
+          if (item.order_id) pendingOrderIds.delete(item.order_id);
           continue;
         }
         if (!item.data) {
           console.warn('[TD] Dead letter — invalid retry payload:', item);
+          if (item.order_id) pendingOrderIds.delete(item.order_id);
           continue;
         }
 
         const nextItem = { ...item, attempts: item.attempts + 1 };
         try {
-          const res = await postEvent(item.data);
-          if (res.status >= 200 && res.status < 300) {
+          const success = await new Promise((resolve) => {
+            enqueueEventSend({
+              fillData: item.data,
+              orderId: item.order_id || '',
+              onSuccess: () => resolve(true),
+              onFailure: () => resolve(false),
+            });
+          });
+          if (success) {
             console.log('[TD] ✅ Retry successful');
             continue;
           }
