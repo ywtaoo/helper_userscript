@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.2.4
+// @version      0.2.5
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC 日内交易纪律辅助系统 — DOM 抓取 + 状态面板 + 风险提醒
@@ -28,6 +28,17 @@
   const MAX_RETRY_ATTEMPTS = 3;
   const STATUS_REQUEST_TIMEOUT_MS = 8000;
   const EVENT_REQUEST_TIMEOUT_MS = 8000;
+  const HTML_ESCAPE_MAP = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  };
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (ch) => HTML_ESCAPE_MAP[ch]);
+  }
 
   // ============================================================
   // 1. DOM Scraper — Orders > Filled Tab (M2)
@@ -1641,7 +1652,7 @@
     overlay.id = 'td-risk-overlay';
 
     const extraHTML = extraWarning
-      ? `<div class="td-modal-extra">${extraWarning}</div>`
+      ? `<div class="td-modal-extra">${escapeHtml(extraWarning)}</div>`
       : '';
 
     overlay.innerHTML = `
@@ -1967,7 +1978,7 @@
     const scoreColor = score !== null ? (score >= 60 ? '#2ecc71' : score >= 40 ? '#f39c12' : '#e74c3c') : '#888';
 
     const errorHint = inferErrorHint(annoForm);
-    const errorHintHTML = errorHint ? `<span class="td-anno-error-hint">← 推断: ${errorHint}</span>` : '';
+    const errorHintHTML = errorHint ? `<span class="td-anno-error-hint">← 推断: ${escapeHtml(errorHint)}</span>` : '';
 
     const isLast = annoIdx >= annoTrades.length - 1;
     const saveBtnText = isLast ? '保存并关闭' : '保存并下一笔';
@@ -1986,7 +1997,7 @@
     ).join('');
 
     const selectedChips = annoForm.psych_triggers.length > 0 && !(annoForm.psych_triggers.length === 1 && annoForm.psych_triggers[0] === 'None')
-      ? annoForm.psych_triggers.map(t => `<span class="td-anno-chip">${t}<span class="td-anno-chip-x" data-trigger="${t}">✕</span></span>`).join('')
+      ? annoForm.psych_triggers.map(t => `<span class="td-anno-chip">${escapeHtml(t)}<span class="td-anno-chip-x" data-trigger="${escapeHtml(t)}">✕</span></span>`).join('')
       : '<span style="font-size:13px">—</span>';
     const triggerOptions = PSYCH_TRIGGERS.map(t => {
       const sel = annoForm.psych_triggers.includes(t) ? 'selected' : '';
@@ -2025,7 +2036,7 @@
           <div class="td-anno-nav-info">
             <div class="td-anno-nav-counter">${annoIdx + 1} / ${annoTrades.length}</div>
             <div class="td-anno-nav-trade">
-              ${trade.symbol} ${trade.side} <span style="color:${pnlColor}">${pnlSign}$${pnl.toFixed(2)}</span>${checkMark}
+              ${escapeHtml(trade.symbol)} ${escapeHtml(trade.side)} <span style="color:${pnlColor}">${pnlSign}$${pnl.toFixed(2)}</span>${checkMark}
             </div>
           </div>
           <button class="td-anno-nav-arrow" id="td-anno-next" ${annoIdx >= annoTrades.length - 1 ? 'disabled' : ''}>►</button>
