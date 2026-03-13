@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.2.9
+// @version      0.3.0
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
-// @description  ES/NQ/GC 日内交易纪律辅助系统 — DOM 抓取 + 状态面板 + 风险提醒
+// @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
 // @author       hoho
 // @match        https://www.tradingview.com/chart/*
 // @match        https://www.tradingview.com/chart*
@@ -692,7 +692,7 @@
   }
 
   // ============================================================
-  // 2. Retry Queue (降级处理)
+  // 2. Retry Queue (degraded fallback)
   // ============================================================
 
   function loadRetryQueue() {
@@ -2026,7 +2026,7 @@
         <span class="td-value ${pnlClass}">${formatMoney(status.daily_net_pnl, 2)}</span>
       </div>
       ${dotsHTML}
-      ${tl.golden_complete ? '<div class="td-golden-msg">Perfect day — 考虑收工？</div>' : ''}
+      ${tl.golden_complete ? '<div class="td-golden-msg">Perfect day — Consider wrapping up?</div>' : ''}
       <div class="td-divider"></div>
       ${buildPreArmButtonHTML(status)}
       <div class="td-divider"></div>
@@ -2405,7 +2405,7 @@
 
       if (!isValidStatusPayload(status) || !isValidTradesPayload(tradesPayload)) {
         console.error('[TD] Invalid payload received:', { status, tradesPayload });
-        showDegraded('状态格式异常');
+        showDegraded('Status format error');
         return;
       }
 
@@ -2425,7 +2425,7 @@
       checkTradeLimitWarning(status);
     } catch (error) {
       console.error('[TD] Failed to refresh panel data:', error);
-      showDegraded(getRequestErrorMessage(error, '后端不可达'));
+      showDegraded(getRequestErrorMessage(error, 'Backend unreachable'));
     } finally {
       isRefreshingStatus = false;
       if (pendingStatusRefresh && !cleanedUp) {
@@ -2447,7 +2447,7 @@
       panelEl.innerHTML = buildPanelHTML(lastStatus, lastTrades);
       const notice = document.createElement('div');
       notice.className = 'td-degraded';
-      notice.textContent = `⚠ 数据暂不可用 · 最后更新 ${timeStr}${reasonText}`;
+      notice.textContent = `⚠ Data unavailable · Last update ${timeStr}${reasonText}`;
       panelEl.appendChild(notice);
       return;
     }
@@ -2458,7 +2458,7 @@
         <span class="td-title">📊 Discipline</span>
         <span class="td-risk-dot td-risk-green"></span>
       </div>
-      <div class="td-degraded">⚠ 数据暂不可用${reasonText}</div>
+      <div class="td-degraded">⚠ Data unavailable${reasonText}</div>
     `;
   }
 
@@ -2486,16 +2486,16 @@
     overlay.innerHTML = `
       <div id="td-risk-modal">
         <div class="td-modal-icon">⚠️</div>
-        <div class="td-modal-title">高情绪交易风险</div>
+        <div class="td-modal-title">High Emotional Risk</div>
         <div class="td-modal-body">
-          检测到你在过去1小时内连续2笔亏损。<br>
-          当前处于高情绪交易风险区。<br><br>
-          建议暂停并重新确认计划后再执行下一笔。
+          2 consecutive losses in the past hour detected.<br>
+          You may be in an elevated emotional state.<br><br>
+          Pause and reconfirm your plan before the next trade.
         </div>
         ${extraHTML}
         <div class="td-modal-btns">
-          <button class="td-btn td-btn-cancel" id="td-risk-cancel">取消</button>
-          <button class="td-btn td-btn-confirm" id="td-risk-confirm" disabled>确认继续 (5s)</button>
+          <button class="td-btn td-btn-cancel" id="td-risk-cancel">Cancel</button>
+          <button class="td-btn td-btn-confirm" id="td-risk-confirm" disabled>Confirm (5s)</button>
         </div>
       </div>
     `;
@@ -2551,14 +2551,14 @@
     timerId = setInterval(() => {
       countdown--;
       if (countdown > 0) {
-        confirmBtn.textContent = `确认继续 (${countdown}s)`;
+        confirmBtn.textContent = `Confirm (${countdown}s)`;
       } else {
         if (timerId) {
           clearInterval(timerId);
           timerId = null;
         }
         confirmBtn.disabled = false;
-        confirmBtn.textContent = '确认继续';
+        confirmBtn.textContent = 'Confirm';
       }
     }, 1000);
   }
@@ -2574,14 +2574,14 @@
     const isRed = zone === 'red';
     const countdown = isRed ? 5 : 3;
     const zoneClass = isRed ? 'td-limit-red' : 'td-limit-overtime';
-    const title = isRed ? '已达日交易上限' : '超出最佳交易区间';
+    const title = isRed ? 'Daily Trade Limit Reached' : 'Outside Optimal Range';
     const icon = isRed ? '🛑' : '⚠️';
     const body = isRed
-      ? `今日已 ${count} 笔交易。你正在偏离计划。<br>请输入继续的理由：`
-      : `你已完成 ${count} 笔交易，最佳节奏是 1-2 笔。<br>确认继续？`;
+      ? `${count} trades today. You're deviating from plan.<br>Enter your reason to continue:`
+      : `${count} trades completed. Optimal pace is 1–2.<br>Confirm to continue?`;
 
     const reasonHTML = isRed
-      ? '<textarea class="td-limit-reason" id="td-limit-reason" placeholder="为什么需要继续交易？"></textarea>'
+      ? '<textarea class="td-limit-reason" id="td-limit-reason" placeholder="Why do you need to continue trading?"></textarea>'
       : '';
 
     const overlay = document.createElement('div');
@@ -2594,8 +2594,8 @@
         <div class="td-modal-body">${body}</div>
         ${reasonHTML}
         <div class="td-modal-btns">
-          <button class="td-btn td-btn-cancel" id="td-limit-cancel">取消</button>
-          <button class="td-btn td-btn-confirm" id="td-limit-confirm" disabled>确认继续 (${countdown}s)</button>
+          <button class="td-btn td-btn-cancel" id="td-limit-cancel">Cancel</button>
+          <button class="td-btn td-btn-confirm" id="td-limit-confirm" disabled>Confirm (${countdown}s)</button>
         </div>
       </div>
     `;
@@ -2653,14 +2653,14 @@
     timerId = setInterval(() => {
       remaining--;
       if (remaining > 0) {
-        confirmBtn.textContent = `确认继续 (${remaining}s)`;
+        confirmBtn.textContent = `Confirm (${remaining}s)`;
       } else {
         if (timerId) {
           clearInterval(timerId);
           timerId = null;
         }
         countdownDone = true;
-        confirmBtn.textContent = '确认继续';
+        confirmBtn.textContent = 'Confirm';
         updateConfirmState();
       }
     }, 1000);
@@ -3354,7 +3354,7 @@
     const pnlDisplay = formatMoney(pnl, 2);
     const checkMark = isAnnotationIncomplete(trade) ? '' : '<span class="td-anno-nav-check">✓</span>';
     const nextIncompleteIdx = findNextIncompleteTradeIndex(annoTrades, annoIdx);
-    const saveBtnText = nextIncompleteIdx === -1 ? '保存并关闭' : '保存并下一笔';
+    const saveBtnText = nextIncompleteIdx === -1 ? 'Save & Close' : 'Save & Next';
     const setupDisplay = getSetupDisplay(trade);
     const setupCompleteness = typeof trade.annotations.setup_completeness === 'number'
       ? `${Math.round(trade.annotations.setup_completeness * 100)}%`
@@ -3385,7 +3385,7 @@
     overlay.innerHTML = `
       <div class="td-anno-modal">
         <div class="td-anno-modal-header">
-          <span class="td-anno-modal-title">📝 今日交易标注</span>
+          <span class="td-anno-modal-title">📝 Trade Annotations</span>
           <button class="td-anno-close" id="td-anno-close">✕</button>
         </div>
         <div class="td-anno-nav">
@@ -3425,7 +3425,7 @@
           <select class="td-anno-select" id="td-anno-mindset">${mindsetOpts}</select>
         </div>
         ${showErrorType ? `<div class="td-anno-field">
-          <span class="td-anno-field-label">错误类型</span>
+          <span class="td-anno-field-label">Error Type</span>
           <select class="td-anno-select" id="td-anno-error">${errorOpts}</select>
         </div>` : ''}
         <div class="td-anno-field">
@@ -3499,7 +3499,7 @@
 
     const saveBtn = overlay.querySelector('#td-anno-save');
     saveBtn.disabled = true;
-    saveBtn.textContent = '保存中...';
+    saveBtn.textContent = 'Saving...';
 
     const payload = buildAnnotationPayload(trade, annoForm);
 
@@ -3525,7 +3525,7 @@
     } catch (error) {
       console.error('[TD] ❌ Annotation save error:', error);
       saveBtn.disabled = false;
-      saveBtn.textContent = '保存失败 — 重试';
+      saveBtn.textContent = 'Save failed — Retry';
     }
   }
 
