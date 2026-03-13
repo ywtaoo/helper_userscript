@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.2.5
+// @version      0.2.8
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC 日内交易纪律辅助系统 — DOM 抓取 + 状态面板 + 风险提醒
@@ -23,11 +23,23 @@
   const API_BASE = 'http://localhost:18080/api';
   const REFRESH_INTERVAL = 30000; // 30s panel refresh
   const RETRY_QUEUE_KEY = 'td_retry_queue';
+  const PRE_ARM_DRAFT_KEY = 'td_pre_arm_draft';
   const ACCOUNT_MANAGER_WAIT_TIMEOUT_MS = 60000;
   const POLL_MIN_INTERVAL_MS = 400;
   const MAX_RETRY_ATTEMPTS = 3;
   const STATUS_REQUEST_TIMEOUT_MS = 8000;
   const EVENT_REQUEST_TIMEOUT_MS = 8000;
+  const DEFAULT_REQUEST_TIMEOUT_MS = 8000;
+  const PLAN_ADHERENCE_OPTIONS = ['Yes', 'Partial', 'No'];
+  const MINDSET_OPTIONS = ['Calm', 'FOMO', 'Revenge', 'Fatigued'];
+  const ERROR_TYPES = ['Untagged', 'Chase', 'Early Entry', 'Late Entry', 'Oversize', 'Move Stop', 'Add to Loser', 'Overtrade', 'Rule Violation', 'Bad Exit', 'Other'];
+  const IS_TEST_MODE = typeof globalThis !== 'undefined' && globalThis.__TD_TEST_MODE__ === true;
+  const IS_MAC_PLATFORM = /Mac|iPhone|iPad|iPod/i.test(
+    (navigator.userAgentData && navigator.userAgentData.platform) ||
+    navigator.platform ||
+    navigator.userAgent ||
+    '',
+  );
   const HTML_ESCAPE_MAP = {
     '&': '&amp;',
     '<': '&lt;',
@@ -38,6 +50,192 @@
 
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, (ch) => HTML_ESCAPE_MAP[ch]);
+  }
+
+  function createRequestError(message, status = 0, body = '') {
+    const error = new Error(message);
+    error.status = status;
+    error.body = body;
+    return error;
+  }
+
+  function requestJson(method, path, options = {}) {
+    const { data, headers = {}, timeout = DEFAULT_REQUEST_TIMEOUT_MS } = options;
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method,
+        url: `${API_BASE}${path}`,
+        timeout,
+        headers: data === undefined
+          ? headers
+          : { 'Content-Type': 'application/json', ...headers },
+        data: data === undefined ? undefined : JSON.stringify(data),
+        onload: (res) => {
+          if (res.status < 200 || res.status >= 300) {
+            reject(createRequestError(`HTTP ${res.status}`, res.status, res.responseText));
+            return;
+          }
+
+          if (!res.responseText) {
+            resolve(null);
+            return;
+          }
+
+          try {
+            resolve(JSON.parse(res.responseText));
+          } catch (error) {
+            reject(createRequestError('Invalid JSON response', res.status, res.responseText));
+          }
+        },
+        onerror: (error) => reject(error),
+        ontimeout: () => reject(createRequestError('timeout')),
+      });
+    });
+  }
+
+  function formatMoney(value, digits = 2) {
+    if (value === null || value === undefined) return '—';
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return '—';
+    const sign = amount >= 0 ? '+' : '-';
+    return `${sign}$${Math.abs(amount).toFixed(digits)}`;
+  }
+
+  function formatClockTime(timestamp) {
+    if (!timestamp) return '—';
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '—';
+    return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function trimToNull(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  function getTradeResult(trade) {
+    if (!trade) return '—';
+    const rawPnl = trade.realized_pnl_net;
+    if (rawPnl === null || rawPnl === undefined) return '—';
+    const pnl = Number(rawPnl);
+    if (!Number.isFinite(pnl)) return '—';
+    if (trade.is_breakeven) return 'BE';
+    return pnl > 0 ? 'W' : 'L';
+  }
+
+  function isLosingTrade(trade) {
+    if (!trade) return false;
+    const rawPnl = trade.realized_pnl_net;
+    if (rawPnl === null || rawPnl === undefined) return false;
+    const pnl = Number(rawPnl);
+    return Number.isFinite(pnl) && pnl < 0;
+  }
+
+  function getNumericPnl(value) {
+    if (value === null || value === undefined) return null;
+    const amount = Number(value);
+    return Number.isFinite(amount) ? amount : null;
+  }
+
+  function isAnnotationIncomplete(trade) {
+    const annotations = (trade && trade.annotations) || {};
+    if (annotations.playbook === 'Untagged') {
+      return true;
+    }
+    if (annotations.plan_adherence === null || annotations.plan_adherence === undefined) {
+      return true;
+    }
+    if (annotations.mindset === null || annotations.mindset === undefined) {
+      return true;
+    }
+    return isLosingTrade(trade) && annotations.error_type === 'Untagged';
+  }
+
+  function getSetupProgress(trade) {
+    const setupChecks = trade && trade.annotations && Array.isArray(trade.annotations.setup_checks)
+      ? trade.annotations.setup_checks
+      : null;
+    if (!setupChecks || setupChecks.length === 0) return null;
+    const checked = setupChecks.filter(Boolean).length;
+    return { checked, total: setupChecks.length };
+  }
+
+  function getSetupDisplay(trade) {
+    const progress = getSetupProgress(trade);
+    if (!progress) {
+      return { text: '—', className: 'td-setup-none' };
+    }
+
+    if (progress.checked === progress.total) {
+      return { text: `${progress.checked}/${progress.total} ✓`, className: 'td-setup-complete' };
+    }
+
+    return { text: `${progress.checked}/${progress.total} ⚠`, className: 'td-setup-partial' };
+  }
+
+  function cloneChecklistState(state) {
+    return Array.isArray(state) ? state.map(Boolean) : [];
+  }
+
+  function areChecklistStatesEqual(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!!a[i] !== !!b[i]) return false;
+    }
+    return true;
+  }
+
+  function calculateSetupAverage(trades) {
+    const values = (Array.isArray(trades) ? trades : [])
+      .map((trade) => trade && trade.annotations && trade.annotations.setup_completeness)
+      .filter((value) => typeof value === 'number' && Number.isFinite(value));
+
+    if (values.length === 0) return null;
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+  }
+
+  function sortTradesForDisplay(trades) {
+    return [...(Array.isArray(trades) ? trades : [])].sort((a, b) => {
+      const aTime = (a.close_time || a.open_time || '');
+      const bTime = (b.close_time || b.open_time || '');
+      return bTime.localeCompare(aTime);
+    });
+  }
+
+  function isEditableElement(target) {
+    if (!target || !(target instanceof Element)) return false;
+    const tagName = target.tagName ? target.tagName.toLowerCase() : '';
+    return (
+      target.isContentEditable ||
+      tagName === 'input' ||
+      tagName === 'textarea' ||
+      tagName === 'select' ||
+      !!target.closest('[contenteditable="true"]')
+    );
+  }
+
+  function getRequestErrorMessage(error, fallback) {
+    if (error && error.message === 'timeout') {
+      return `${fallback} (timeout)`;
+    }
+    if (error && error.status) {
+      return `${fallback} (${error.status})`;
+    }
+    if (error && error.statusText) {
+      return `${fallback} (${error.statusText})`;
+    }
+    return fallback;
+  }
+
+  function getPreArmShortcutLabel() {
+    return IS_MAC_PLATFORM ? 'Cmd+S' : 'Alt+S';
+  }
+
+  function isPreArmShortcutEvent(event) {
+    const key = event && typeof event.key === 'string' ? event.key.toLowerCase() : '';
+    if (key !== 's') return false;
+    return IS_MAC_PLATFORM ? !!event.metaKey : !!event.altKey;
   }
 
   // ============================================================
@@ -134,6 +332,11 @@
       panelInitTimeoutId = null;
     }
     unbindPanelInteractions();
+    if (preArmShortcutBound) {
+      document.removeEventListener('keydown', onPreArmShortcut, true);
+      preArmShortcutBound = false;
+    }
+    closePreArmModal();
   }
 
   function registerLifecycleCleanup() {
@@ -197,6 +400,14 @@
     return a.fillData.fill_id - b.fillData.fill_id;
   }
 
+  async function ensurePreArmReadyForFillSend() {
+    const active = getCurrentActivePreArm();
+    if (!active || !hasDirtyPreArmDraft(active)) {
+      return;
+    }
+    await flushPreArmDraft();
+  }
+
   function sendEventPayload(payload) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
@@ -224,12 +435,17 @@
 
     try {
       while (eventSendQueue.length > 0) {
-        const item = eventSendQueue.shift();
-        if (!item || !item.fillData) continue;
+        const item = eventSendQueue[0];
+        if (!item || !item.fillData) {
+          eventSendQueue.shift();
+          continue;
+        }
 
         try {
+          await ensurePreArmReadyForFillSend();
           const res = await sendEventPayload(item.fillData);
           if (res.status >= 200 && res.status < 300) {
+            eventSendQueue.shift();
             if (item.orderId) {
               clearPendingOrderSnapshot(item.orderId, item.snapshotKey);
               rememberSentOrderSnapshot(item.orderId, item.snapshotKey);
@@ -240,12 +456,21 @@
             continue;
           }
 
+          eventSendQueue.shift();
           if (item.onFailure) {
             item.onFailure(res);
           } else {
             throw new Error(`HTTP ${res.status}`);
           }
         } catch (error) {
+          if (hasDirtyPreArmDraft(getCurrentActivePreArm())) {
+            console.error('[TD] ❌ Fill send blocked until pre-arm draft saves:', error);
+            if (item.onBlocked) {
+              item.onBlocked(error);
+            }
+            break;
+          }
+          eventSendQueue.shift();
           if (item.onFailure) {
             item.onFailure(error);
           } else {
@@ -570,6 +795,7 @@
               orderId: item.order_id || '',
               snapshotKey: item.snapshot_key,
               onSuccess: () => resolve(true),
+              onBlocked: () => resolve(false),
               onFailure: () => resolve(false),
             });
           });
@@ -594,7 +820,9 @@
   }
 
   // Retry every 60s
-  retryIntervalId = setInterval(processRetryQueue, 60000);
+  if (!IS_TEST_MODE) {
+    retryIntervalId = setInterval(processRetryQueue, 60000);
+  }
 
   // ============================================================
   // 3. Panel UI (M3)
@@ -602,11 +830,35 @@
 
   let panelEl = null;
   let lastStatus = null;
+  let lastTrades = [];
   let lastUpdateTime = null;
   let isCollapsed = localStorage.getItem('td_panel_collapsed') === 'true';
   let panelPos = JSON.parse(localStorage.getItem('td_panel_pos') || '{"top":"80px","right":"80px","left":""}');
   let panelInteractionsBound = false;
+  let playbooksCache = [];
+  let playbookLoadPromise = null;
+  let pendingTradeIdsInitialized = false;
+  let seenPendingTradeIds = new Set();
+  let preArmModalEl = null;
+  let preArmSelectionId = '';
+  let preArmShortcutBound = false;
+  let preArmModalPos = JSON.parse(localStorage.getItem('td_pre_arm_pos') || '{"top":"124px","left":"","right":"320px"}');
+  let preArmCreatePending = false;
+  let preArmCancelPending = false;
+  let preArmChecklistSyncPending = false;
+  let preArmDraft = loadPreArmDraftFromStorage();
+  let preArmFlushPromise = null;
+  let preArmHydrationPromise = null;
+  let preArmActiveSnapshot = undefined;
+  let preArmSyncError = '';
   const panelDragState = {
+    isDragging: false,
+    startX: 0,
+    startY: 0,
+    initialLeft: 0,
+    initialTop: 0,
+  };
+  const preArmDragState = {
     isDragging: false,
     startX: 0,
     startY: 0,
@@ -1224,6 +1476,419 @@
         cursor: not-allowed;
       }
 
+      /* Checklist rebuild overrides */
+      #td-panel {
+        width: 290px;
+        padding: 14px 16px 16px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)),
+          rgba(16, 18, 28, 0.95);
+        border-radius: 14px;
+        font-family: 'IBM Plex Sans', 'SF Pro Text', -apple-system, sans-serif;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+      }
+      #td-panel .td-row {
+        gap: 12px;
+        padding: 4px 0;
+      }
+      #td-panel .td-label {
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      #td-panel .td-divider {
+        margin: 12px 0;
+      }
+      #td-panel .td-zone-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 6px 0 2px;
+      }
+      #td-panel .td-setup-btn {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        width: 100%;
+        padding: 9px 11px;
+        margin-top: 8px;
+        background: linear-gradient(135deg, rgba(88, 166, 255, 0.12), rgba(88, 166, 255, 0.04));
+        border: 1px solid rgba(88, 166, 255, 0.2);
+        border-radius: 10px;
+        color: #edf1ff;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: transform 0.18s, background 0.18s, border-color 0.18s;
+        font-family: inherit;
+      }
+      #td-panel .td-setup-btn:hover {
+        transform: translateY(-1px);
+        background: linear-gradient(135deg, rgba(88, 166, 255, 0.18), rgba(88, 166, 255, 0.08));
+        border-color: rgba(88, 166, 255, 0.32);
+      }
+      #td-panel .td-setup-btn.td-setup-active {
+        border-color: rgba(58, 208, 132, 0.26);
+        background: linear-gradient(135deg, rgba(58, 208, 132, 0.14), rgba(58, 208, 132, 0.05));
+      }
+      #td-panel .td-setup-btn-main {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #td-panel .td-setup-btn-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.08);
+        font-size: 13px;
+      }
+      #td-panel .td-setup-btn-copy {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        line-height: 1.2;
+      }
+      #td-panel .td-setup-btn-sub,
+      #td-panel .td-setup-btn-hotkey {
+        font-size: 11px;
+        color: #8e93ad;
+      }
+      #td-panel .td-setup-btn-hotkey {
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      #td-panel .td-trade-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      #td-panel .td-trade-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #edf1ff;
+        cursor: pointer;
+        transition: transform 0.18s, background 0.18s, border-color 0.18s;
+        box-sizing: border-box;
+        font-family: inherit;
+      }
+      #td-panel .td-trade-row:hover {
+        transform: translateY(-1px);
+        background: rgba(255, 255, 255, 0.07);
+        border-color: rgba(255, 255, 255, 0.1);
+      }
+      #td-panel .td-trade-row.td-trade-pending {
+        border-color: rgba(255, 184, 77, 0.26);
+      }
+      #td-panel .td-trade-main {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        min-width: 0;
+      }
+      #td-panel .td-trade-time {
+        font-size: 12px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      #td-panel .td-trade-symbol {
+        font-size: 12px;
+        color: #8e93ad;
+        letter-spacing: 0.06em;
+      }
+      #td-panel .td-trade-metrics {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-left: auto;
+      }
+      #td-panel .td-trade-result-badge,
+      #td-panel .td-setup-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      #td-panel .td-trade-result-badge {
+        min-width: 24px;
+        padding: 1px 6px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+      #td-panel .td-trade-pnl {
+        font-size: 12px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      #td-panel .td-result-w { color: #3ad084; }
+      #td-panel .td-result-l { color: #ff6b63; }
+      #td-panel .td-result-be { color: #ffb84d; }
+      #td-panel .td-result-na { color: #8e93ad; }
+      #td-panel .td-neutral { color: #8e93ad; }
+      #td-panel .td-setup-pill {
+        min-width: 46px;
+        padding: 2px 8px;
+      }
+      #td-panel .td-setup-complete {
+        background: rgba(58, 208, 132, 0.12);
+        color: #3ad084;
+      }
+      #td-panel .td-setup-partial {
+        background: rgba(255, 184, 77, 0.14);
+        color: #ffb84d;
+      }
+      #td-panel .td-setup-none {
+        background: rgba(255, 255, 255, 0.06);
+        color: #8e93ad;
+      }
+      #td-panel .td-empty-state {
+        padding: 12px 10px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #8e93ad;
+        text-align: center;
+        font-size: 12px;
+      }
+      #td-panel .td-footer-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      #td-panel .td-stat {
+        padding: 10px 11px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        color: inherit;
+        text-align: left;
+        font-family: inherit;
+      }
+      #td-panel .td-stat-label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #8e93ad;
+        margin-bottom: 2px;
+      }
+      #td-panel .td-stat-value {
+        font-size: 15px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      #td-panel .td-stat-link {
+        cursor: pointer;
+        transition: border-color 0.18s, background 0.18s;
+      }
+      #td-panel .td-stat-link:hover:not(:disabled) {
+        border-color: rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.07);
+      }
+      #td-panel .td-stat-link:disabled {
+        cursor: default;
+        opacity: 0.7;
+      }
+      #td-prearm-modal {
+        position: fixed;
+        width: 360px;
+        max-width: calc(100vw - 32px);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0)),
+          rgba(10, 14, 22, 0.88);
+        color: #edf1ff;
+        border: 1px solid rgba(88, 166, 255, 0.18);
+        border-radius: 16px;
+        backdrop-filter: blur(14px);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.48);
+        z-index: 99999;
+        padding: 14px 14px 16px;
+        box-sizing: border-box;
+        font-family: 'IBM Plex Sans', 'SF Pro Text', -apple-system, sans-serif;
+      }
+      #td-prearm-modal .td-prearm-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+        cursor: grab;
+      }
+      #td-prearm-modal .td-prearm-header:active {
+        cursor: grabbing;
+      }
+      #td-prearm-modal .td-prearm-title {
+        font-size: 14px;
+        font-weight: 700;
+      }
+      #td-prearm-modal .td-prearm-subtitle {
+        font-size: 11px;
+        color: #8e93ad;
+      }
+      #td-prearm-modal .td-prearm-close {
+        background: none;
+        border: none;
+        color: #8e93ad;
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 1;
+      }
+      #td-prearm-modal .td-prearm-section {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      #td-prearm-modal .td-prearm-controls {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+      }
+      #td-prearm-modal .td-prearm-select,
+      .td-anno-select,
+      .td-anno-note {
+        width: 100%;
+        box-sizing: border-box;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 10px;
+        padding: 9px 10px;
+        color: #edf1ff;
+        font-size: 13px;
+        font-family: inherit;
+      }
+      #td-prearm-modal .td-prearm-select:focus,
+      .td-anno-select:focus,
+      .td-anno-note:focus {
+        outline: none;
+        border-color: rgba(88, 166, 255, 0.28);
+      }
+      #td-prearm-modal .td-prearm-btn,
+      .td-anno-save-btn {
+        border-radius: 10px;
+      }
+      #td-prearm-modal .td-prearm-btn {
+        border: none;
+        padding: 10px 14px;
+        font-size: 12px;
+        font-weight: 700;
+        color: #fff;
+        background: linear-gradient(135deg, #58a6ff, #2b7de9);
+        cursor: pointer;
+        font-family: inherit;
+      }
+      #td-prearm-modal .td-prearm-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      #td-prearm-modal .td-prearm-btn-secondary {
+        background: rgba(255, 255, 255, 0.08);
+        color: #edf1ff;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+      #td-prearm-modal .td-prearm-chip-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12px;
+      }
+      #td-prearm-modal .td-prearm-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 9px;
+        border-radius: 999px;
+        background: rgba(58, 208, 132, 0.12);
+        color: #3ad084;
+        font-weight: 700;
+      }
+      #td-prearm-modal .td-prearm-helper {
+        font-size: 12px;
+        color: #8e93ad;
+        line-height: 1.6;
+      }
+      #td-prearm-modal .td-prearm-status {
+        font-size: 12px;
+        color: #8e93ad;
+        line-height: 1.5;
+        min-height: 18px;
+      }
+      #td-prearm-modal .td-prearm-status-error {
+        color: #ffb84d;
+      }
+      #td-prearm-modal .td-prearm-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      #td-prearm-modal .td-prearm-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+      #td-prearm-modal .td-prearm-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 9px 10px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        cursor: pointer;
+      }
+      #td-prearm-modal .td-prearm-item input {
+        margin-top: 3px;
+      }
+      #td-prearm-modal .td-prearm-item span {
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .td-anno-summary {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .td-anno-field {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+      }
+      .td-anno-summary-card {
+        border-radius: 10px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
+      .td-anno-summary-label {
+        font-size: 11px;
+        color: #8e93ad;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 3px;
+      }
+      .td-anno-summary-value {
+        font-size: 13px;
+        font-weight: 700;
+        color: #edf1ff;
+      }
+      .td-anno-note {
+        min-height: 40px;
+      }
+
       /* Risk Warning Modal */
       #td-risk-overlay {
         position: fixed;
@@ -1325,7 +1990,12 @@
     console.log('[TD] 📊 Discipline panel initialized');
   }
 
-  function buildPanelHTML(status) {
+  function rerenderPanel() {
+    if (!lastStatus) return;
+    renderPanel(lastStatus, lastTrades);
+  }
+
+  function buildPanelHTML(status, trades = lastTrades) {
     if (!status) {
       return `
         <div class="td-header">
@@ -1337,29 +2007,10 @@
     }
 
     const pnlClass = status.daily_net_pnl >= 0 ? 'td-positive' : 'td-negative';
-    const pnlSign = status.daily_net_pnl >= 0 ? '+' : '';
     const riskClass = status.risk.state === 'red' ? 'td-risk-red' : 'td-risk-green';
-    const scoreColor = status.discipline_score_color === 'orange' ? 'td-orange' : 'td-neutral';
-    const scoreText = status.discipline_score_today !== null
-      ? status.discipline_score_today.toFixed(0)
-      : '—';
-
-    // Trade dots
     const tl = status.trade_limit || { trades_today: 0, zone: 'waiting', golden_complete: false };
     const dotsHTML = buildTradeDotsHTML(tl);
-
-    let last5HTML = '';
-    if (status.last_5_trades && status.last_5_trades.length > 0) {
-      last5HTML = status.last_5_trades.slice().reverse().map(t => {
-        let chipClass = 'td-chip-be';
-        if (t.result === 'W') chipClass = 'td-chip-w';
-        if (t.result === 'L') chipClass = 'td-chip-l';
-        const sign = t.pnl_net >= 0 ? '+' : '';
-        return `<span class="td-trade-chip ${chipClass}">${t.result} ${sign}$${t.pnl_net.toFixed(0)}</span>`;
-      }).join('');
-    } else {
-      last5HTML = '<span class="td-neutral">—</span>';
-    }
+    const setupAverage = calculateSetupAverage(trades);
 
     return `
       <div class="td-header">
@@ -1372,21 +2023,25 @@
       <div class="td-content">
       <div class="td-row">
         <span class="td-label">Today PnL</span>
-        <span class="td-value ${pnlClass}">${pnlSign}$${status.daily_net_pnl.toFixed(2)}</span>
+        <span class="td-value ${pnlClass}">${formatMoney(status.daily_net_pnl, 2)}</span>
       </div>
       ${dotsHTML}
       ${tl.golden_complete ? '<div class="td-golden-msg">Perfect day — 考虑收工？</div>' : ''}
       <div class="td-divider"></div>
-      <div>
-        <div class="td-label" style="margin-bottom: 4px;">Last 5</div>
-        <div class="td-last5">${last5HTML}</div>
-      </div>
+      ${buildPreArmButtonHTML(status)}
       <div class="td-divider"></div>
-      <div class="td-row">
-        <span class="td-label">Discipline</span>
-        <span class="td-value ${scoreColor}">${scoreText}</span>
+      ${buildTradeListHTML(trades)}
+      <div class="td-divider"></div>
+      <div class="td-footer-grid">
+        <div class="td-stat">
+          <div class="td-stat-label">Setup Avg</div>
+          <div class="td-stat-value">${setupAverage === null ? '—' : `${Math.round(setupAverage * 100)}%`}</div>
+        </div>
+        <button class="td-stat td-stat-link" id="td-pending-open" ${status.pending_annotations > 0 ? '' : 'disabled'}>
+          <div class="td-stat-label">Pending</div>
+          <div class="td-stat-value">${status.pending_annotations || 0}</div>
+        </button>
       </div>
-      ${buildAnnoBtnHTML(status)}
       </div>
     `;
   }
@@ -1408,16 +2063,86 @@
       }
     }
 
-    let label = '';
-    if (zone === 'waiting') label = '等待 setup...';
-    else if (zone === 'golden') label = '';
-    else if (zone === 'overtime') label = '⚠ 超出最佳区间';
-    else if (zone === 'red') label = '■ 已达日限';
+    let label = 'Waiting';
+    if (zone === 'golden') label = 'Golden zone';
+    else if (zone === 'overtime') label = 'Overtime';
+    else if (zone === 'red') label = 'Red zone';
 
     return `
-      <div class="td-dots-row">
+      <div class="td-zone-row">
         <div class="td-dots">${dots}</div>
-        ${label ? `<span class="td-dots-label">${label}</span>` : ''}
+        <span class="td-dots-label">${label}</span>
+      </div>
+    `;
+  }
+
+  function buildPreArmButtonHTML(status) {
+    const active = getDisplayedPreArm(status && status.active_pre_arm ? status.active_pre_arm : null);
+    const checkedCount = active ? active.checklist_state.filter(Boolean).length : 0;
+    const totalCount = active ? active.checklist_state.length : 0;
+    const buttonClass = active ? 'td-setup-btn td-setup-active' : 'td-setup-btn';
+    const label = active ? active.playbook_name : 'Watch setup';
+    let subLabel = 'Pick playbook and track the setup live';
+    if (active && preArmSyncError) {
+      subLabel = 'Save failed - will retry automatically';
+    } else if (active && preArmChecklistSyncPending) {
+      subLabel = `Saving ${checkedCount}/${totalCount}...`;
+    } else if (active && hasDirtyPreArmDraft(status.active_pre_arm)) {
+      subLabel = `Unsaved ${checkedCount}/${totalCount}`;
+    } else if (active) {
+      subLabel = `Checklist ${checkedCount}/${totalCount}`;
+    }
+
+    return `
+      <button class="${buttonClass}" id="td-setup-open">
+        <span class="td-setup-btn-main">
+          <span class="td-setup-btn-icon">🎯</span>
+          <span class="td-setup-btn-copy">
+            <span class="td-setup-btn-label">${escapeHtml(label)}</span>
+            <span class="td-setup-btn-sub">${escapeHtml(subLabel)}</span>
+          </span>
+        </span>
+        <span class="td-setup-btn-hotkey">${getPreArmShortcutLabel()}</span>
+      </button>
+    `;
+  }
+
+  function buildTradeListHTML(trades) {
+    const displayTrades = sortTradesForDisplay(trades).slice(0, 4);
+    if (displayTrades.length === 0) {
+      return '<div class="td-empty-state">No closed trades yet today.</div>';
+    }
+
+    return `
+      <div class="td-trade-list">
+        ${displayTrades.map((trade) => {
+          const result = getTradeResult(trade);
+          const resultClass = result === 'W'
+            ? 'td-result-w'
+            : result === 'L'
+              ? 'td-result-l'
+              : result === 'BE'
+                ? 'td-result-be'
+                : 'td-result-na';
+          const setupDisplay = getSetupDisplay(trade);
+          const pnl = getNumericPnl(trade.realized_pnl_net);
+          const pnlClass = pnl === null ? 'td-neutral' : pnl >= 0 ? 'td-positive' : 'td-negative';
+          const pendingClass = isAnnotationIncomplete(trade) ? 'td-trade-pending' : '';
+
+          return `
+            <button class="td-trade-row ${pendingClass}" data-trade-id="${escapeHtml(trade.trade_id)}">
+              <span class="td-trade-main">
+                <span class="td-trade-time">${formatClockTime(trade.open_time)}</span>
+                <span class="td-trade-symbol">${escapeHtml(trade.symbol)}</span>
+              </span>
+              <span class="td-trade-metrics">
+                <span class="td-trade-result-badge ${resultClass}">${result}</span>
+                <span class="td-trade-pnl ${pnlClass}">${formatMoney(pnl, 0)}</span>
+                <span class="td-setup-pill ${setupDisplay.className}">${escapeHtml(setupDisplay.text)}</span>
+              </span>
+            </button>
+          `;
+        }).join('')}
       </div>
     `;
   }
@@ -1440,10 +2165,24 @@
       return;
     }
 
-    const annoBtn = e.target.closest('#td-anno-open');
-    if (annoBtn && panelEl.contains(annoBtn)) {
+    const setupBtn = e.target.closest('#td-setup-open');
+    if (setupBtn && panelEl.contains(setupBtn)) {
       e.preventDefault();
-      openAnnotationModal();
+      void togglePreArmModal();
+      return;
+    }
+
+    const pendingBtn = e.target.closest('#td-pending-open');
+    if (pendingBtn && panelEl.contains(pendingBtn)) {
+      e.preventDefault();
+      void openAnnotationModal();
+      return;
+    }
+
+    const tradeRow = e.target.closest('[data-trade-id]');
+    if (tradeRow && panelEl.contains(tradeRow)) {
+      e.preventDefault();
+      void openAnnotationModal({ tradeId: tradeRow.dataset.tradeId });
     }
   }
 
@@ -1523,88 +2262,177 @@
     );
   }
 
-  function refreshStatus() {
+  function isValidTradesPayload(payload) {
+    return payload && Array.isArray(payload.trades);
+  }
+
+  function renderPanel(status, trades) {
+    if (!panelEl) return;
+    panelEl.innerHTML = buildPanelHTML(status, trades);
+    if (status && status.trade_limit && status.trade_limit.golden_complete) {
+      panelEl.classList.add('td-golden-border');
+    } else {
+      panelEl.classList.remove('td-golden-border');
+    }
+  }
+
+  function syncPendingTradeState(trades) {
+    const pendingTrades = sortTradesForDisplay(trades).filter((trade) => isAnnotationIncomplete(trade));
+    const pendingIds = new Set(pendingTrades.map((trade) => trade.trade_id));
+
+    if (!pendingTradeIdsInitialized) {
+      pendingTradeIdsInitialized = true;
+      seenPendingTradeIds = pendingIds;
+      return;
+    }
+
+    const newlyPendingTrade = pendingTrades.find((trade) => !seenPendingTradeIds.has(trade.trade_id));
+    seenPendingTradeIds = pendingIds;
+
+    if (newlyPendingTrade && !document.querySelector('.td-anno-overlay')) {
+      void openAnnotationModal({ tradeId: newlyPendingTrade.trade_id });
+    }
+  }
+
+  function syncPreArmState(previousActiveId, activePreArm) {
+    if (activePreArm) {
+      preArmSelectionId = activePreArm.playbook_id;
+      syncPreArmDraftWithServer(activePreArm);
+      if (!hasDirtyPreArmDraft(activePreArm)) {
+        preArmSyncError = '';
+      }
+    } else {
+      preArmChecklistSyncPending = false;
+      preArmFlushPromise = null;
+      preArmSyncError = '';
+      clearPreArmDraft();
+    }
+
+    if (!preArmModalEl) {
+      return;
+    }
+
+    if (!activePreArm && previousActiveId) {
+      closePreArmModal();
+      return;
+    }
+
+    renderPreArmModal();
+  }
+
+  function setLocalActivePreArm(activePreArm) {
+    preArmActiveSnapshot = activePreArm || null;
+    if (lastStatus) {
+      lastStatus.active_pre_arm = activePreArm || null;
+    }
+  }
+
+  function hasHydratedActivePreArm() {
+    return lastStatus !== null || preArmActiveSnapshot !== undefined;
+  }
+
+  async function hydrateActivePreArm(force = false) {
+    if (lastStatus) {
+      setLocalActivePreArm(lastStatus.active_pre_arm);
+      return lastStatus.active_pre_arm || null;
+    }
+    if (!force && preArmActiveSnapshot !== undefined) {
+      return preArmActiveSnapshot;
+    }
+    if (preArmHydrationPromise) {
+      return preArmHydrationPromise;
+    }
+
+    preArmHydrationPromise = (async () => {
+      try {
+        const response = await requestJson('GET', '/pre-arm/active', {
+          timeout: STATUS_REQUEST_TIMEOUT_MS,
+        });
+        const activePreArm = response && Object.prototype.hasOwnProperty.call(response, 'active_pre_arm')
+          ? response.active_pre_arm
+          : null;
+        setLocalActivePreArm(activePreArm);
+        syncPreArmState(null, activePreArm);
+        return activePreArm;
+      } catch (error) {
+        console.error('[TD] Failed to hydrate active pre-arm session:', error);
+        preArmSyncError = getRequestErrorMessage(error, 'Failed to load active setup');
+        syncPreArmModalUi();
+        throw error;
+      } finally {
+        preArmHydrationPromise = null;
+        syncPreArmModalUi();
+      }
+    })();
+
+    syncPreArmModalUi();
+    return preArmHydrationPromise;
+  }
+
+  async function ensurePreArmReadyForCreate(options = {}) {
+    const {
+      getActivePreArm = getCurrentActivePreArm,
+      hasHydratedPreArm = hasHydratedActivePreArm,
+      hydratePreArm = hydrateActivePreArm,
+    } = options;
+
+    const currentActive = getActivePreArm();
+    if (currentActive) {
+      return currentActive;
+    }
+    if (hasHydratedPreArm()) {
+      return null;
+    }
+    return hydratePreArm(true);
+  }
+
+  async function refreshStatus() {
     if (cleanedUp) return;
     if (isRefreshingStatus) {
       pendingStatusRefresh = true;
       return;
     }
     isRefreshingStatus = true;
-    let finalized = false;
 
-    const finalize = () => {
-      if (finalized) return;
-      finalized = true;
+    try {
+      const previousActiveId = lastStatus && lastStatus.active_pre_arm
+        ? lastStatus.active_pre_arm.id
+        : null;
+      const [status, tradesPayload] = await Promise.all([
+        requestJson('GET', '/status', { timeout: STATUS_REQUEST_TIMEOUT_MS }),
+        requestJson('GET', '/trades', { timeout: STATUS_REQUEST_TIMEOUT_MS }),
+      ]);
+
+      if (!isValidStatusPayload(status) || !isValidTradesPayload(tradesPayload)) {
+        console.error('[TD] Invalid payload received:', { status, tradesPayload });
+        showDegraded('状态格式异常');
+        return;
+      }
+
+      lastStatus = status;
+      setLocalActivePreArm(status.active_pre_arm);
+      lastTrades = sortTradesForDisplay(tradesPayload.trades || []);
+      lastUpdateTime = new Date();
+
+      renderPanel(status, lastTrades);
+      syncPreArmState(previousActiveId, status.active_pre_arm);
+      syncPendingTradeState(lastTrades);
+
+      if (status.risk.triggered && !riskAcknowledged) {
+        showRiskWarning(status.risk.extra_warning);
+      }
+
+      checkTradeLimitWarning(status);
+    } catch (error) {
+      console.error('[TD] Failed to refresh panel data:', error);
+      showDegraded(getRequestErrorMessage(error, '后端不可达'));
+    } finally {
       isRefreshingStatus = false;
       if (pendingStatusRefresh && !cleanedUp) {
         pendingStatusRefresh = false;
         refreshStatus();
       }
-    };
-
-    GM_xmlhttpRequest({
-      method: 'GET',
-      url: `${API_BASE}/status`,
-      timeout: STATUS_REQUEST_TIMEOUT_MS,
-      onload: (res) => {
-        try {
-          if (res.status < 200 || res.status >= 300) {
-            console.error('[TD] Status request failed:', res.status, res.responseText);
-            showDegraded(`HTTP ${res.status}`);
-            return;
-          }
-
-          const status = JSON.parse(res.responseText);
-
-          if (!isValidStatusPayload(status)) {
-            console.error('[TD] Invalid status payload:', status);
-            showDegraded('状态格式异常');
-            return;
-          }
-
-          lastStatus = status;
-          lastUpdateTime = new Date();
-
-          if (panelEl) {
-            panelEl.innerHTML = buildPanelHTML(status);
-
-            // Golden border toggle
-            if (status.trade_limit && status.trade_limit.golden_complete) {
-              panelEl.classList.add('td-golden-border');
-            } else {
-              panelEl.classList.remove('td-golden-border');
-            }
-          }
-
-          // Check for risk trigger
-          if (status.risk.triggered && !riskAcknowledged) {
-            showRiskWarning(status.risk.extra_warning);
-          }
-
-          // Check for trade limit warning
-          checkTradeLimitWarning(status);
-        } catch (e) {
-          console.error('[TD] Failed to handle status response:', e, res.responseText);
-          showDegraded('状态解析失败');
-        } finally {
-          finalize();
-        }
-      },
-      onerror: () => {
-        try {
-          showDegraded('后端不可达');
-        } finally {
-          finalize();
-        }
-      },
-      ontimeout: () => {
-        try {
-          showDegraded('状态请求超时');
-        } finally {
-          finalize();
-        }
-      },
-    });
+    }
   }
 
   function showDegraded(reason = '') {
@@ -1616,7 +2444,7 @@
 
     // Keep last successful data but show degraded notice.
     if (lastStatus) {
-      panelEl.innerHTML = buildPanelHTML(lastStatus);
+      panelEl.innerHTML = buildPanelHTML(lastStatus, lastTrades);
       const notice = document.createElement('div');
       notice.className = 'td-degraded';
       notice.textContent = `⚠ 数据暂不可用 · 最后更新 ${timeStr}${reasonText}`;
@@ -1857,170 +2685,696 @@
   // 6. Annotation UI
   // ============================================================
 
-  const PLAYBOOKS = ['iFVG', 'Unicorn', 'Saitama', 'Other', 'Untagged'];
-  const PSYCH_STATES = ['Calm', 'Pressured', 'Impulsive', 'Fatigued'];
-  const PSYCH_TRIGGERS = ['FOMO', 'Revenge', 'Hesitation', 'Overconfidence', 'Distraction', 'None'];
-  const ERROR_TYPES = ['Untagged', 'Chase', 'Early Entry', 'Late Entry', 'Oversize', 'Move Stop', 'Add to Loser', 'Overtrade', 'Rule Violation', 'Bad Exit', 'Other'];
-  const DC_KEYS = [
-    { key: 'plan_before_entry',     label: '入场前有计划' },
-    { key: 'position_within_risk',  label: '仓位符合风控' },
-    { key: 'stop_set_not_widened',  label: '止损设置未放宽' },
-    { key: 'no_add_to_loser',       label: '未向亏损加仓' },
-    { key: 'no_impulse_after_loss', label: '亏后未冲动连开' },
-  ];
-  const DC_SCORE_MAP = { Yes: 2, Partial: 1, No: 0 };
-  const DC_TO_ERROR = {
-    stop_set_not_widened: 'Move Stop',
-    no_add_to_loser: 'Add to Loser',
-    no_impulse_after_loss: 'Overtrade',
-  };
-
   let annoTrades = [];
   let annoIdx = 0;
   let annoForm = {};
 
-  function buildAnnoBtnHTML(status) {
-    const pending = status.pending_annotations || 0;
-    if (pending === 0) {
-      return '<button class="td-anno-btn" id="td-anno-open">📝 标注</button>';
+  function ensurePlaybooksLoaded() {
+    if (playbooksCache.length > 0) {
+      return Promise.resolve(playbooksCache);
     }
-    return `<button class="td-anno-btn" id="td-anno-open">📝 标注 <span class="td-anno-badge">${pending}</span></button>`;
+    if (playbookLoadPromise) {
+      return playbookLoadPromise;
+    }
+
+    playbookLoadPromise = requestJson('GET', '/playbooks')
+      .then((response) => {
+        playbooksCache = response && Array.isArray(response.playbooks) ? response.playbooks : [];
+        if (!preArmSelectionId && playbooksCache[0]) {
+          preArmSelectionId = playbooksCache[0].id;
+        }
+        return playbooksCache;
+      })
+      .finally(() => {
+        playbookLoadPromise = null;
+      });
+
+    return playbookLoadPromise;
   }
 
-  function openAnnotationModal() {
-    if (document.querySelector('.td-anno-overlay')) return;
-
-    // Fetch today's trades
-    GM_xmlhttpRequest({
-      method: 'GET',
-      url: `${API_BASE}/trades`,
-      onload: (res) => {
-        if (res.status < 200 || res.status >= 300) {
-          console.error('[TD] Failed to fetch trades for annotation:', res.status);
-          return;
-        }
-        try {
-          const data = JSON.parse(res.responseText);
-          annoTrades = data.trades || [];
-          if (annoTrades.length === 0) {
-            console.log('[TD] No trades to annotate');
-            return;
-          }
-          // Start at first unannotated trade, or first trade
-          annoIdx = annoTrades.findIndex(t => t.discipline_score === null);
-          if (annoIdx === -1) annoIdx = 0;
-          annoForm = {};
-          renderAnnoModal();
-        } catch (e) {
-          console.error('[TD] Failed to parse trades:', e);
-        }
-      },
-      onerror: (err) => {
-        console.error('[TD] Failed to fetch trades:', err);
-      },
-    });
+  function findPlaybookDefinition(playbookId) {
+    return playbooksCache.find((playbook) => playbook.id === playbookId) || null;
   }
 
-  function loadFormFromTrade(trade) {
-    const a = trade.annotations || {};
-    const dc = a.discipline_checks || {};
+  function getPlaybookLabel(playbookId) {
+    if (playbookId === 'Untagged') return 'Untagged';
+    const playbook = findPlaybookDefinition(playbookId);
+    return playbook && typeof playbook.name === 'string' && playbook.name.trim()
+      ? playbook.name
+      : playbookId;
+  }
+
+  function buildPlaybookOptions(includeUntagged = false) {
+    const ids = playbooksCache.map((playbook) => playbook.id);
+    return includeUntagged ? [...ids, 'Untagged'] : ids;
+  }
+
+  function loadPreArmDraftFromStorage() {
+    try {
+      const raw = localStorage.getItem(PRE_ARM_DRAFT_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || typeof parsed.session_id !== 'string') {
+        return null;
+      }
+      return {
+        sessionId: parsed.session_id,
+        playbookId: typeof parsed.playbook_id === 'string' ? parsed.playbook_id : '',
+        checklistState: cloneChecklistState(parsed.checklist_state),
+        updatedAt: Number(parsed.updated_at) || Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function persistPreArmDraft() {
+    if (!preArmDraft) {
+      localStorage.removeItem(PRE_ARM_DRAFT_KEY);
+      return;
+    }
+    localStorage.setItem(PRE_ARM_DRAFT_KEY, JSON.stringify({
+      session_id: preArmDraft.sessionId,
+      playbook_id: preArmDraft.playbookId,
+      checklist_state: cloneChecklistState(preArmDraft.checklistState),
+      updated_at: preArmDraft.updatedAt,
+    }));
+  }
+
+  function clearPreArmDraft() {
+    preArmDraft = null;
+    persistPreArmDraft();
+  }
+
+  function getCurrentActivePreArm() {
+    if (lastStatus) {
+      return lastStatus.active_pre_arm ? lastStatus.active_pre_arm : null;
+    }
+    return preArmActiveSnapshot === undefined ? null : preArmActiveSnapshot;
+  }
+
+  function getDisplayedPreArm(active = getCurrentActivePreArm()) {
+    if (!active) return null;
+    if (!preArmDraft || preArmDraft.sessionId !== active.id) {
+      return active;
+    }
     return {
-      playbook: a.playbook || 'Untagged',
-      psych_state: a.psych_state || '',
-      psych_triggers: Array.isArray(a.psych_triggers) ? [...a.psych_triggers] : [],
-      error_type: a.error_type || 'Untagged',
-      plan_before_entry: dc.plan_before_entry || null,
-      position_within_risk: dc.position_within_risk || null,
-      stop_set_not_widened: dc.stop_set_not_widened || null,
-      no_add_to_loser: dc.no_add_to_loser || null,
-      no_impulse_after_loss: dc.no_impulse_after_loss || null,
+      ...active,
+      checklist_state: cloneChecklistState(preArmDraft.checklistState),
     };
   }
 
-  function calcLiveScore(form) {
-    const vals = DC_KEYS.map(d => form[d.key]);
-    if (vals.some(v => v === null || v === undefined)) return null;
-    const total = vals.reduce((s, v) => s + (DC_SCORE_MAP[v] || 0), 0);
-    return Math.round((total / 10) * 100);
+  function hasDirtyPreArmDraft(active = getCurrentActivePreArm()) {
+    if (!active || !preArmDraft || preArmDraft.sessionId !== active.id) {
+      return false;
+    }
+    return !areChecklistStatesEqual(preArmDraft.checklistState, active.checklist_state);
   }
 
-  function inferErrorHint(form) {
-    if (form.error_type !== 'Untagged') return null;
-    for (const [checkKey, errorType] of Object.entries(DC_TO_ERROR)) {
-      if (form[checkKey] === 'No') return errorType;
+  function ensurePreArmDraft(active = getCurrentActivePreArm()) {
+    if (!active) {
+      clearPreArmDraft();
+      return null;
     }
-    return null;
+
+    const serverState = cloneChecklistState(active.checklist_state);
+    if (
+      preArmDraft &&
+      preArmDraft.sessionId === active.id &&
+      preArmDraft.playbookId === active.playbook_id &&
+      preArmDraft.checklistState.length === serverState.length
+    ) {
+      return preArmDraft;
+    }
+
+    preArmDraft = {
+      sessionId: active.id,
+      playbookId: active.playbook_id,
+      checklistState: serverState,
+      updatedAt: Date.now(),
+    };
+    persistPreArmDraft();
+    return preArmDraft;
+  }
+
+  function syncPreArmDraftWithServer(active) {
+    if (!active) {
+      clearPreArmDraft();
+      return;
+    }
+    ensurePreArmDraft(active);
+  }
+
+  function bindPreArmShortcutOnce() {
+    if (preArmShortcutBound) return;
+    document.addEventListener('keydown', onPreArmShortcut, true);
+    preArmShortcutBound = true;
+  }
+
+  function onPreArmShortcut(event) {
+    if (!isPreArmShortcutEvent(event) || isEditableElement(event.target)) {
+      return;
+    }
+    event.preventDefault();
+    void togglePreArmModal();
+  }
+
+  function isPreArmShellBusy() {
+    return preArmCreatePending || preArmCancelPending;
+  }
+
+  function getPreArmStatusDescriptor(active) {
+    if (preArmHydrationPromise) {
+      return {
+        className: 'td-prearm-status',
+        text: 'Checking for active setup...',
+      };
+    }
+    if (preArmSyncError) {
+      return {
+        className: 'td-prearm-status td-prearm-status-error',
+        text: preArmSyncError,
+      };
+    }
+    if (preArmCreatePending) {
+      return {
+        className: 'td-prearm-status',
+        text: 'Saving setup session...',
+      };
+    }
+    if (preArmCancelPending) {
+      return {
+        className: 'td-prearm-status',
+        text: 'Canceling active setup...',
+      };
+    }
+    if (preArmChecklistSyncPending) {
+      return {
+        className: 'td-prearm-status',
+        text: 'Saving checklist draft...',
+      };
+    }
+    if (active && hasDirtyPreArmDraft(active)) {
+      return {
+        className: 'td-prearm-status',
+        text: 'Draft saved locally. It will sync when you close this modal or before the next fill is sent.',
+      };
+    }
+    return {
+      className: 'td-prearm-status',
+      text: active
+        ? `${getPreArmShortcutLabel()} hides this modal. Cancel watch removes the active setup.`
+        : 'Checklist starts once you click Start.',
+    };
+  }
+
+  function onPreArmMouseDown(event) {
+    if (!preArmModalEl || event.button !== 0) return;
+    const header = event.target.closest('.td-prearm-header');
+    if (!header || !preArmModalEl.contains(header)) return;
+    if (event.target.closest('.td-prearm-close')) return;
+
+    preArmDragState.isDragging = true;
+    preArmDragState.startX = event.clientX;
+    preArmDragState.startY = event.clientY;
+
+    const rect = preArmModalEl.getBoundingClientRect();
+    preArmDragState.initialLeft = rect.left;
+    preArmDragState.initialTop = rect.top;
+    preArmModalEl.style.right = 'auto';
+    event.preventDefault();
+  }
+
+  function onPreArmMouseMove(event) {
+    if (!preArmModalEl || !preArmDragState.isDragging) return;
+    const dx = event.clientX - preArmDragState.startX;
+    const dy = event.clientY - preArmDragState.startY;
+    preArmModalEl.style.left = `${preArmDragState.initialLeft + dx}px`;
+    preArmModalEl.style.top = `${preArmDragState.initialTop + dy}px`;
+  }
+
+  function onPreArmMouseUp() {
+    if (!preArmModalEl || !preArmDragState.isDragging) return;
+    preArmDragState.isDragging = false;
+    preArmModalPos = {
+      top: preArmModalEl.style.top,
+      left: preArmModalEl.style.left,
+      right: '',
+    };
+    localStorage.setItem('td_pre_arm_pos', JSON.stringify(preArmModalPos));
+  }
+
+  function closePreArmModal() {
+    if (!preArmModalEl) return;
+    document.removeEventListener('mousemove', onPreArmMouseMove);
+    document.removeEventListener('mouseup', onPreArmMouseUp);
+    preArmDragState.isDragging = false;
+    preArmModalEl.remove();
+    preArmModalEl = null;
+  }
+
+  function syncPreArmModalUi() {
+    if (!preArmModalEl) return;
+
+    const active = getCurrentActivePreArm();
+    const displayed = getDisplayedPreArm(active);
+    const statusDescriptor = getPreArmStatusDescriptor(active);
+    const chip = preArmModalEl.querySelector('#td-prearm-chip');
+    const statusEl = preArmModalEl.querySelector('#td-prearm-status');
+    const startBtn = preArmModalEl.querySelector('#td-prearm-start');
+    const select = preArmModalEl.querySelector('#td-prearm-select');
+    const cancelBtn = preArmModalEl.querySelector('#td-prearm-cancel');
+    const checklistState = displayed ? displayed.checklist_state : [];
+    const progress = displayed ? `${checklistState.filter(Boolean).length}/${checklistState.length}` : 'Preview';
+
+    if (chip) {
+      chip.textContent = displayed ? `${displayed.playbook_name} · ${progress}` : 'Preview';
+    }
+
+    if (statusEl) {
+      statusEl.className = statusDescriptor.className;
+      statusEl.textContent = statusDescriptor.text;
+    }
+
+    if (startBtn) {
+      startBtn.disabled = isPreArmShellBusy() || !!preArmHydrationPromise || !preArmSelectionId;
+      startBtn.textContent = preArmCreatePending ? 'Saving...' : 'Start';
+    }
+
+    if (select) {
+      select.disabled = !!active || isPreArmShellBusy();
+    }
+
+    if (cancelBtn) {
+      cancelBtn.disabled = !active || isPreArmShellBusy();
+    }
+
+    preArmModalEl.querySelectorAll('[data-check-index]').forEach((input) => {
+      const index = Number(input.dataset.checkIndex);
+      input.checked = !!checklistState[index];
+      input.disabled = !active || isPreArmShellBusy();
+    });
+  }
+
+  async function openPreArmModal() {
+    if (!preArmModalEl) {
+      preArmModalEl = document.createElement('div');
+      preArmModalEl.id = 'td-prearm-modal';
+      preArmModalEl.style.top = preArmModalPos.top;
+      if (preArmModalPos.left) {
+        preArmModalEl.style.left = preArmModalPos.left;
+      }
+      if (preArmModalPos.right) {
+        preArmModalEl.style.right = preArmModalPos.right;
+      }
+      document.body.appendChild(preArmModalEl);
+      preArmModalEl.addEventListener('mousedown', onPreArmMouseDown);
+      document.addEventListener('mousemove', onPreArmMouseMove);
+      document.addEventListener('mouseup', onPreArmMouseUp);
+    }
+
+    renderPreArmModal();
+
+    const [playbooksResult] = await Promise.allSettled([
+      ensurePlaybooksLoaded(),
+      hydrateActivePreArm(),
+    ]);
+    if (playbooksResult.status === 'rejected') {
+      const error = playbooksResult.reason;
+      console.error('[TD] Failed to load playbooks for pre-arm modal:', error);
+      preArmSyncError = getRequestErrorMessage(error, 'Failed to load playbooks');
+      renderPreArmModal();
+      return;
+    }
+
+    if (!preArmSelectionId && playbooksCache[0]) {
+      preArmSelectionId = playbooksCache[0].id;
+    }
+    renderPreArmModal();
+  }
+
+  async function togglePreArmModal() {
+    if (!preArmModalEl) {
+      await openPreArmModal();
+      return;
+    }
+    void dismissPreArmModal();
+  }
+
+  async function startPreArmTracking() {
+    if (!preArmSelectionId || isPreArmShellBusy()) return;
+    try {
+      const activePreArm = await ensurePreArmReadyForCreate();
+      if (activePreArm) {
+        preArmSyncError = '';
+        renderPreArmModal();
+        return;
+      }
+    } catch (error) {
+      console.error('[TD] Blocking pre-arm create until active session read succeeds:', error);
+      syncPreArmModalUi();
+      return;
+    }
+
+    preArmCreatePending = true;
+    preArmSyncError = '';
+    syncPreArmModalUi();
+    try {
+      const response = await requestJson('POST', '/pre-arm', {
+        data: { playbook_id: preArmSelectionId },
+      });
+      setLocalActivePreArm(response.active_pre_arm);
+      syncPreArmDraftWithServer(response.active_pre_arm);
+      if (lastStatus) {
+        rerenderPanel();
+      }
+      renderPreArmModal();
+      void refreshStatus();
+    } catch (error) {
+      console.error('[TD] Failed to create pre-arm session:', error);
+      preArmSyncError = getRequestErrorMessage(error, 'Failed to start setup');
+    } finally {
+      preArmCreatePending = false;
+      syncPreArmModalUi();
+    }
+  }
+
+  async function flushPreArmDraft() {
+    if (preArmFlushPromise) return preArmFlushPromise;
+    const active = getCurrentActivePreArm();
+    if (!active) return null;
+
+    const draft = ensurePreArmDraft(active);
+    if (!draft || !hasDirtyPreArmDraft(active)) {
+      preArmSyncError = '';
+      rerenderPanel();
+      syncPreArmModalUi();
+      return active;
+    }
+
+    preArmChecklistSyncPending = true;
+    preArmSyncError = '';
+    rerenderPanel();
+    syncPreArmModalUi();
+
+    preArmFlushPromise = (async () => {
+      try {
+        const response = await requestJson('PATCH', `/pre-arm/${active.id}`, {
+          data: { checklist_state: cloneChecklistState(draft.checklistState) },
+        });
+        setLocalActivePreArm(response.active_pre_arm);
+        syncPreArmDraftWithServer(response.active_pre_arm);
+        preArmSyncError = '';
+        rerenderPanel();
+        syncPreArmModalUi();
+        if (eventSendQueue.length > 0) {
+          setTimeout(() => {
+            void drainEventSendQueue();
+          }, 0);
+        }
+        return response.active_pre_arm;
+      } catch (error) {
+        console.error('[TD] Failed to update pre-arm session:', error);
+        preArmSyncError = getRequestErrorMessage(error, 'Failed to save setup draft');
+        rerenderPanel();
+        syncPreArmModalUi();
+        throw error;
+      } finally {
+        preArmChecklistSyncPending = false;
+        preArmFlushPromise = null;
+        rerenderPanel();
+        syncPreArmModalUi();
+      }
+    })();
+
+    return preArmFlushPromise;
+  }
+
+  function updatePreArmChecklist(index) {
+    const active = getCurrentActivePreArm();
+    if (!active || isPreArmShellBusy()) return;
+
+    const draft = ensurePreArmDraft(active);
+    const nextState = cloneChecklistState(draft ? draft.checklistState : active.checklist_state);
+    if (!Number.isInteger(index) || index < 0 || index >= nextState.length) {
+      console.warn('[TD] Ignoring checklist update with invalid index:', index);
+      return;
+    }
+    nextState[index] = !nextState[index];
+    preArmDraft = {
+      sessionId: active.id,
+      playbookId: active.playbook_id,
+      checklistState: nextState,
+      updatedAt: Date.now(),
+    };
+    preArmSyncError = '';
+    persistPreArmDraft();
+    rerenderPanel();
+    syncPreArmModalUi();
+  }
+
+  async function dismissPreArmModal() {
+    const active = getCurrentActivePreArm();
+    const shouldFlush = !!active && hasDirtyPreArmDraft(active);
+    closePreArmModal();
+    if (!shouldFlush) return;
+    try {
+      await flushPreArmDraft();
+    } catch (error) {
+      console.error('[TD] Failed to flush pre-arm draft on dismiss:', error);
+    }
+  }
+
+  async function cancelActivePreArm() {
+    const active = getCurrentActivePreArm();
+    if (!active || isPreArmShellBusy()) {
+      closePreArmModal();
+      return;
+    }
+
+    preArmCancelPending = true;
+    preArmSyncError = '';
+    syncPreArmModalUi();
+    try {
+      await requestJson('DELETE', `/pre-arm/${active.id}`);
+      setLocalActivePreArm(null);
+      preArmChecklistSyncPending = false;
+      preArmFlushPromise = null;
+      clearPreArmDraft();
+      preArmSyncError = '';
+      if (lastStatus) {
+        rerenderPanel();
+      }
+      closePreArmModal();
+      void refreshStatus();
+    } catch (error) {
+      console.error('[TD] Failed to cancel pre-arm session:', error);
+      preArmSyncError = getRequestErrorMessage(error, 'Failed to cancel setup');
+    } finally {
+      preArmCancelPending = false;
+      syncPreArmModalUi();
+    }
+  }
+
+  function renderPreArmModal() {
+    if (!preArmModalEl) return;
+
+    const active = getCurrentActivePreArm();
+    const displayed = getDisplayedPreArm(active);
+    const playbookId = active ? active.playbook_id : preArmSelectionId;
+    const playbook = findPlaybookDefinition(playbookId);
+    const checklistItems = active
+      ? active.checklist_items
+      : (playbook ? playbook.checklist_items : []);
+    const checklistState = displayed
+      ? displayed.checklist_state
+      : checklistItems.map(() => false);
+    const progress = displayed ? `${checklistState.filter(Boolean).length}/${checklistState.length}` : 'preview';
+    const options = buildPlaybookOptions(false).map((id) => `
+      <option value="${escapeHtml(id)}" ${id === playbookId ? 'selected' : ''}>${escapeHtml(getPlaybookLabel(id))}</option>
+    `).join('');
+    const statusDescriptor = getPreArmStatusDescriptor(active);
+
+    preArmModalEl.innerHTML = `
+      <div class="td-prearm-header">
+        <div>
+          <div class="td-prearm-title">🎯 Watch Setup</div>
+          <div class="td-prearm-subtitle">${active ? 'Checklist edits stay local first, then save when you hide the modal or before the next fill is sent.' : 'Choose a playbook and start the checklist before entry.'}</div>
+        </div>
+        <button class="td-prearm-close" id="td-prearm-close">✕</button>
+      </div>
+      <div class="td-prearm-section">
+        <div class="td-prearm-controls">
+          <select class="td-prearm-select" id="td-prearm-select" ${active ? 'disabled' : ''}>
+            ${options}
+          </select>
+          ${active ? '' : `<button class="td-prearm-btn" id="td-prearm-start" ${isPreArmShellBusy() || preArmHydrationPromise || !preArmSelectionId ? 'disabled' : ''}>${preArmCreatePending ? 'Saving...' : 'Start'}</button>`}
+        </div>
+        <div class="td-prearm-chip-row">
+          <span class="td-prearm-chip" id="td-prearm-chip">${displayed ? `${escapeHtml(displayed.playbook_name)} · ${progress}` : 'Preview'}</span>
+        </div>
+        <div id="td-prearm-status" class="${statusDescriptor.className}">${escapeHtml(statusDescriptor.text)}</div>
+        <div class="td-prearm-list">
+          ${checklistItems.map((item, index) => `
+            <label class="td-prearm-item">
+              <input type="checkbox" data-check-index="${index}" ${checklistState[index] ? 'checked' : ''} ${active && !isPreArmShellBusy() ? '' : 'disabled'}>
+              <span>${escapeHtml(item)}</span>
+            </label>
+          `).join('')}
+        </div>
+        ${active ? `<div class="td-prearm-actions">
+          <button class="td-prearm-btn td-prearm-btn-secondary" id="td-prearm-cancel" ${isPreArmShellBusy() ? 'disabled' : ''}>Cancel watch</button>
+        </div>` : ''}
+      </div>
+    `;
+
+    preArmModalEl.querySelector('#td-prearm-close').addEventListener('click', () => {
+      void dismissPreArmModal();
+    });
+
+    const select = preArmModalEl.querySelector('#td-prearm-select');
+    if (select) {
+      select.addEventListener('change', (event) => {
+        preArmSelectionId = event.target.value;
+        renderPreArmModal();
+      });
+    }
+
+    const startBtn = preArmModalEl.querySelector('#td-prearm-start');
+    if (startBtn) {
+      startBtn.addEventListener('click', () => {
+        void startPreArmTracking();
+      });
+    }
+
+    const cancelBtn = preArmModalEl.querySelector('#td-prearm-cancel');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        void cancelActivePreArm();
+      });
+    }
+
+    preArmModalEl.querySelectorAll('[data-check-index]').forEach((input) => {
+      input.addEventListener('change', () => {
+        updatePreArmChecklist(Number(input.dataset.checkIndex));
+      });
+    });
+  }
+
+  async function openAnnotationModal(options = {}) {
+    if (document.querySelector('.td-anno-overlay')) return;
+
+    try {
+      await ensurePlaybooksLoaded();
+      const response = await requestJson('GET', '/trades');
+      if (!response || !Array.isArray(response.trades) || response.trades.length === 0) {
+        console.log('[TD] No trades to annotate');
+        return;
+      }
+
+      annoTrades = sortTradesForDisplay(response.trades);
+      if (options.tradeId) {
+        annoIdx = annoTrades.findIndex((trade) => trade.trade_id === options.tradeId);
+      } else {
+        annoIdx = annoTrades.findIndex((trade) => isAnnotationIncomplete(trade));
+      }
+      if (annoIdx < 0) annoIdx = 0;
+      annoForm = {};
+      renderAnnoModal();
+    } catch (error) {
+      console.error('[TD] Failed to fetch trades for annotation:', error);
+    }
+  }
+
+  function loadAnnotationFormFromTrade(trade) {
+    const annotations = trade.annotations || {};
+    return {
+      playbook: annotations.playbook || 'Untagged',
+      plan_adherence: annotations.plan_adherence || null,
+      mindset: annotations.mindset || null,
+      error_type: annotations.error_type || 'Untagged',
+      note: annotations.note || '',
+    };
+  }
+
+  function findNextIncompleteTradeIndex(trades, currentIndex, options = {}) {
+    const { includeCurrent = false } = options;
+    if (
+      includeCurrent &&
+      currentIndex >= 0 &&
+      currentIndex < trades.length &&
+      isAnnotationIncomplete(trades[currentIndex])
+    ) {
+      return currentIndex;
+    }
+    for (let i = currentIndex + 1; i < trades.length; i++) {
+      if (isAnnotationIncomplete(trades[i])) return i;
+    }
+    for (let i = 0; i < currentIndex; i++) {
+      if (isAnnotationIncomplete(trades[i])) return i;
+    }
+    return -1;
+  }
+
+  function buildAnnotationPayload(trade, form) {
+    const payload = {
+      playbook: form.playbook || 'Untagged',
+      plan_adherence: form.plan_adherence || null,
+      mindset: form.mindset || null,
+      note: trimToNull(form.note),
+    };
+    if (isLosingTrade(trade)) {
+      payload.error_type = form.error_type || 'Untagged';
+    }
+    return payload;
+  }
+
+  function closeAnnotationModal() {
+    const existing = document.querySelector('.td-anno-overlay');
+    if (existing) existing.remove();
   }
 
   function renderAnnoModal() {
-    // Remove existing
-    const existing = document.querySelector('.td-anno-overlay');
-    if (existing) existing.remove();
+    closeAnnotationModal();
 
     const trade = annoTrades[annoIdx];
     if (!trade) return;
 
-    // Load form from trade data if not already edited
     if (!annoForm._loaded || annoForm._tradeId !== trade.trade_id) {
-      annoForm = loadFormFromTrade(trade);
+      annoForm = loadAnnotationFormFromTrade(trade);
       annoForm._loaded = true;
       annoForm._tradeId = trade.trade_id;
     }
 
-    const pnl = trade.realized_pnl_net !== null ? trade.realized_pnl_net : 0;
-    const pnlSign = pnl >= 0 ? '+' : '';
-    const pnlColor = pnl >= 0 ? '#2ecc71' : '#e74c3c';
-    const isAnnotated = trade.discipline_score !== null;
-    const checkMark = isAnnotated ? '<span class="td-anno-nav-check">✓</span>' : '';
-
-    const score = calcLiveScore(annoForm);
-    const scoreText = score !== null ? score : '—';
-    const scoreColor = score !== null ? (score >= 60 ? '#2ecc71' : score >= 40 ? '#f39c12' : '#e74c3c') : '#888';
-
-    const errorHint = inferErrorHint(annoForm);
-    const errorHintHTML = errorHint ? `<span class="td-anno-error-hint">← 推断: ${escapeHtml(errorHint)}</span>` : '';
-
-    const isLast = annoIdx >= annoTrades.length - 1;
-    const saveBtnText = isLast ? '保存并关闭' : '保存并下一笔';
-
-    // Build select options
-    const playbookOpts = PLAYBOOKS.map(p =>
-      `<option value="${p}" ${annoForm.playbook === p ? 'selected' : ''}>${p}</option>`
-    ).join('');
-
-    const psychOpts = ['<option value="">—</option>'].concat(PSYCH_STATES.map(p =>
-      `<option value="${p}" ${annoForm.psych_state === p ? 'selected' : ''}>${p}</option>`
-    )).join('');
-
-    const errorOpts = ERROR_TYPES.map(e =>
-      `<option value="${e}" ${annoForm.error_type === e ? 'selected' : ''}>${e}</option>`
-    ).join('');
-
-    const selectedChips = annoForm.psych_triggers.length > 0 && !(annoForm.psych_triggers.length === 1 && annoForm.psych_triggers[0] === 'None')
-      ? annoForm.psych_triggers.map(t => `<span class="td-anno-chip">${escapeHtml(t)}<span class="td-anno-chip-x" data-trigger="${escapeHtml(t)}">✕</span></span>`).join('')
-      : '<span style="font-size:13px">—</span>';
-    const triggerOptions = PSYCH_TRIGGERS.map(t => {
-      const sel = annoForm.psych_triggers.includes(t) ? 'selected' : '';
-      const check = annoForm.psych_triggers.includes(t) ? '✓' : '';
-      return `<div class="td-anno-multiselect-option ${sel}" data-trigger="${t}"><span class="td-anno-multiselect-check">${check}</span>${t}</div>`;
-    }).join('');
-    const triggerHTML = `
-      <div class="td-anno-multiselect" id="td-anno-triggers">
-        <div class="td-anno-multiselect-display" id="td-anno-trigger-display">${selectedChips}</div>
-        <div class="td-anno-multiselect-dropdown">${triggerOptions}</div>
-      </div>`;
-
-    const dcRows = DC_KEYS.map(d => {
-      const val = annoForm[d.key];
-      const btnHTML = ['Yes', 'Partial', 'No'].map(v => {
-        const activeClass = val === v ? `td-anno-btn-active-${v.toLowerCase()}` : '';
-        return `<button data-dc="${d.key}" data-val="${v}" class="${activeClass}">${v}</button>`;
-      }).join('');
-      return `
-        <div class="td-anno-check-row">
-          <span class="td-anno-check-label">${d.label}</span>
-          <div class="td-anno-btn-group">${btnHTML}</div>
-        </div>`;
+    const pnl = getNumericPnl(trade.realized_pnl_net);
+    const pnlColor = pnl === null ? '#8e93ad' : pnl >= 0 ? '#2ecc71' : '#e74c3c';
+    const pnlDisplay = formatMoney(pnl, 2);
+    const checkMark = isAnnotationIncomplete(trade) ? '' : '<span class="td-anno-nav-check">✓</span>';
+    const nextIncompleteIdx = findNextIncompleteTradeIndex(annoTrades, annoIdx);
+    const saveBtnText = nextIncompleteIdx === -1 ? '保存并关闭' : '保存并下一笔';
+    const setupDisplay = getSetupDisplay(trade);
+    const setupCompleteness = typeof trade.annotations.setup_completeness === 'number'
+      ? `${Math.round(trade.annotations.setup_completeness * 100)}%`
+      : '—';
+    const showErrorType = isLosingTrade(trade);
+    const playbookIds = buildPlaybookOptions(true);
+    if (annoForm.playbook && !playbookIds.includes(annoForm.playbook)) {
+      playbookIds.push(annoForm.playbook);
+    }
+    const playbookOpts = playbookIds.map((id) => `
+      <option value="${escapeHtml(id)}" ${id === annoForm.playbook ? 'selected' : ''}>${escapeHtml(getPlaybookLabel(id))}</option>
+    `).join('');
+    const mindsetOpts = ['<option value="">—</option>'].concat(MINDSET_OPTIONS.map((value) => `
+      <option value="${value}" ${value === annoForm.mindset ? 'selected' : ''}>${value}</option>
+    `)).join('');
+    const errorOpts = ERROR_TYPES.map((value) => `
+      <option value="${value}" ${value === annoForm.error_type ? 'selected' : ''}>${value}</option>
+    `).join('');
+    const planButtons = PLAN_ADHERENCE_OPTIONS.map((value) => {
+      const activeClass = value === annoForm.plan_adherence
+        ? `td-anno-btn-active-${value.toLowerCase()}`
+        : '';
+      return `<button data-plan="${value}" class="${activeClass}">${value}</button>`;
     }).join('');
 
     const overlay = document.createElement('div');
@@ -2036,38 +3390,45 @@
           <div class="td-anno-nav-info">
             <div class="td-anno-nav-counter">${annoIdx + 1} / ${annoTrades.length}</div>
             <div class="td-anno-nav-trade">
-              ${escapeHtml(trade.symbol)} ${escapeHtml(trade.side)} <span style="color:${pnlColor}">${pnlSign}$${pnl.toFixed(2)}</span>${checkMark}
+              ${formatClockTime(trade.open_time)} ${escapeHtml(trade.symbol)} <span style="color:${pnlColor}">${pnlDisplay}</span>${checkMark}
             </div>
           </div>
           <button class="td-anno-nav-arrow" id="td-anno-next" ${annoIdx >= annoTrades.length - 1 ? 'disabled' : ''}>►</button>
         </div>
-
+        <div class="td-anno-summary">
+          <div class="td-anno-summary-card">
+            <div class="td-anno-summary-label">Playbook</div>
+            <div class="td-anno-summary-value">${escapeHtml(trade.annotations.playbook || 'Untagged')}</div>
+          </div>
+          <div class="td-anno-summary-card">
+            <div class="td-anno-summary-label">Setup</div>
+            <div class="td-anno-summary-value">${escapeHtml(setupDisplay.text)}</div>
+          </div>
+          <div class="td-anno-summary-card">
+            <div class="td-anno-summary-label">Completeness</div>
+            <div class="td-anno-summary-value">${setupCompleteness}</div>
+          </div>
+        </div>
         <div class="td-anno-field">
           <span class="td-anno-field-label">Playbook</span>
           <select class="td-anno-select" id="td-anno-playbook">${playbookOpts}</select>
         </div>
         <div class="td-anno-field">
-          <span class="td-anno-field-label">心理状态</span>
-          <select class="td-anno-select" id="td-anno-psych">${psychOpts}</select>
+          <span class="td-anno-field-label">Plan Adherence</span>
+          <div class="td-anno-btn-group" id="td-anno-plan-group">${planButtons}</div>
         </div>
         <div class="td-anno-field">
-          <span class="td-anno-field-label">心理触发</span>
-          ${triggerHTML}
+          <span class="td-anno-field-label">Mindset</span>
+          <select class="td-anno-select" id="td-anno-mindset">${mindsetOpts}</select>
         </div>
-        <div class="td-anno-field">
+        ${showErrorType ? `<div class="td-anno-field">
           <span class="td-anno-field-label">错误类型</span>
           <select class="td-anno-select" id="td-anno-error">${errorOpts}</select>
-          ${errorHintHTML}
+        </div>` : ''}
+        <div class="td-anno-field">
+          <span class="td-anno-field-label">Note</span>
+          <input class="td-anno-note" id="td-anno-note" type="text" maxlength="160" value="${escapeHtml(annoForm.note || '')}" placeholder="Optional one-liner...">
         </div>
-
-        <div class="td-anno-checks-title">纪律检查</div>
-        ${dcRows}
-
-        <div class="td-anno-score">
-          <span class="td-anno-score-label">纪律分</span>
-          <span class="td-anno-score-value" style="color:${scoreColor}" id="td-anno-score-val">${scoreText}</span>
-        </div>
-
         <button class="td-anno-save-btn" id="td-anno-save">${saveBtnText}</button>
       </div>
     `;
@@ -2077,13 +3438,11 @@
   }
 
   function setupAnnoModalEvents(overlay) {
-    // Close
     overlay.querySelector('#td-anno-close').addEventListener('click', () => overlay.remove());
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) overlay.remove();
     });
 
-    // Navigation
     overlay.querySelector('#td-anno-prev').addEventListener('click', () => {
       if (annoIdx > 0) {
         annoIdx--;
@@ -2099,121 +3458,39 @@
       }
     });
 
-    // Playbook
     overlay.querySelector('#td-anno-playbook').addEventListener('change', (e) => {
       annoForm.playbook = e.target.value;
     });
 
-    // Psych state
-    overlay.querySelector('#td-anno-psych').addEventListener('change', (e) => {
-      annoForm.psych_state = e.target.value || null;
-    });
-
-    // Psych triggers — multi-select dropdown
-    const triggerContainer = overlay.querySelector('#td-anno-triggers');
-    const triggerDisplay = overlay.querySelector('#td-anno-trigger-display');
-
-    // Toggle dropdown open/close
-    triggerDisplay.addEventListener('click', (e) => {
-      // Don't toggle if clicking a chip remove button
-      if (e.target.classList.contains('td-anno-chip-x')) return;
-      triggerContainer.classList.toggle('open');
-    });
-
-    // Close dropdown when clicking outside
-    overlay.addEventListener('click', (e) => {
-      if (!triggerContainer.contains(e.target)) {
-        triggerContainer.classList.remove('open');
-      }
-    });
-
-    // Handle chip remove (×) clicks
-    triggerDisplay.addEventListener('click', (e) => {
-      if (!e.target.classList.contains('td-anno-chip-x')) return;
-      const trigger = e.target.dataset.trigger;
-      annoForm.psych_triggers = annoForm.psych_triggers.filter(t => t !== trigger);
-      renderAnnoModal();
-    });
-
-    // Handle option clicks
-    triggerContainer.querySelector('.td-anno-multiselect-dropdown').addEventListener('click', (e) => {
-      const option = e.target.closest('.td-anno-multiselect-option');
-      if (!option) return;
-      const trigger = option.dataset.trigger;
-      const isSelected = annoForm.psych_triggers.includes(trigger);
-
-      if (isSelected) {
-        annoForm.psych_triggers = annoForm.psych_triggers.filter(t => t !== trigger);
-      } else {
-        if (trigger === 'None') {
-          annoForm.psych_triggers = ['None'];
-        } else {
-          annoForm.psych_triggers = annoForm.psych_triggers.filter(t => t !== 'None');
-          annoForm.psych_triggers.push(trigger);
-        }
-      }
-      renderAnnoModal();
-    });
-
-    // Error type
-    overlay.querySelector('#td-anno-error').addEventListener('change', (e) => {
-      annoForm.error_type = e.target.value;
-    });
-
-    // Discipline check buttons
-    overlay.querySelectorAll('.td-anno-btn-group button').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const key = btn.dataset.dc;
-        const val = btn.dataset.val;
-        // Toggle: click same value again → deselect
-        annoForm[key] = annoForm[key] === val ? null : val;
-        updateScoreDisplay(overlay);
-        // Update button states in place
-        btn.closest('.td-anno-btn-group').querySelectorAll('button').forEach(b => {
-          b.className = '';
-          if (b.dataset.val === annoForm[key]) {
-            b.className = `td-anno-btn-active-${annoForm[key].toLowerCase()}`;
-          }
-        });
-        // Update error hint
-        updateErrorHint(overlay);
+    overlay.querySelectorAll('[data-plan]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const value = button.dataset.plan;
+        annoForm.plan_adherence = annoForm.plan_adherence === value ? null : value;
+        renderAnnoModal();
       });
     });
 
-    // Save
+    overlay.querySelector('#td-anno-mindset').addEventListener('change', (e) => {
+      annoForm.mindset = e.target.value || null;
+    });
+
+    const errorSelect = overlay.querySelector('#td-anno-error');
+    if (errorSelect) {
+      errorSelect.addEventListener('change', (e) => {
+        annoForm.error_type = e.target.value;
+      });
+    }
+
+    overlay.querySelector('#td-anno-note').addEventListener('input', (e) => {
+      annoForm.note = e.target.value;
+    });
+
     overlay.querySelector('#td-anno-save').addEventListener('click', () => {
-      saveAnnotation(overlay);
+      void saveAnnotation(overlay);
     });
   }
 
-  function updateScoreDisplay(overlay) {
-    const score = calcLiveScore(annoForm);
-    const el = overlay.querySelector('#td-anno-score-val');
-    if (!el) return;
-    if (score !== null) {
-      el.textContent = score;
-      el.style.color = score >= 60 ? '#2ecc71' : score >= 40 ? '#f39c12' : '#e74c3c';
-    } else {
-      el.textContent = '—';
-      el.style.color = '#888';
-    }
-  }
-
-  function updateErrorHint(overlay) {
-    const hint = inferErrorHint(annoForm);
-    const field = overlay.querySelector('#td-anno-error')?.closest('.td-anno-field');
-    if (!field) return;
-    const existingHint = field.querySelector('.td-anno-error-hint');
-    if (existingHint) existingHint.remove();
-    if (hint) {
-      const span = document.createElement('span');
-      span.className = 'td-anno-error-hint';
-      span.textContent = `← 推断: ${hint}`;
-      field.appendChild(span);
-    }
-  }
-
-  function saveAnnotation(overlay) {
+  async function saveAnnotation(overlay) {
     const trade = annoTrades[annoIdx];
     if (!trade) return;
 
@@ -2221,64 +3498,49 @@
     saveBtn.disabled = true;
     saveBtn.textContent = '保存中...';
 
-    const payload = {
-      playbook: annoForm.playbook || 'Untagged',
-      psych_state: annoForm.psych_state || null,
-      psych_triggers: annoForm.psych_triggers.length > 0 ? annoForm.psych_triggers : [],
-      error_type: annoForm.error_type || 'Untagged',
-      discipline_checks: {},
-    };
-    DC_KEYS.forEach(d => {
-      if (annoForm[d.key] !== null && annoForm[d.key] !== undefined) {
-        payload.discipline_checks[d.key] = annoForm[d.key];
+    const payload = buildAnnotationPayload(trade, annoForm);
+
+    try {
+      const updated = await requestJson('PATCH', `/trades/${trade.trade_id}/annotations`, {
+        data: payload,
+      });
+      console.log('[TD] ✅ Annotation saved for', trade.trade_id);
+
+      annoTrades[annoIdx] = updated;
+      lastTrades = lastTrades.map((item) => item.trade_id === updated.trade_id ? updated : item);
+
+      const nextIdx = findNextIncompleteTradeIndex(annoTrades, annoIdx, { includeCurrent: true });
+      if (nextIdx === -1) {
+        overlay.remove();
+      } else {
+        annoIdx = nextIdx;
+        annoForm = {};
+        renderAnnoModal();
       }
-    });
 
-    GM_xmlhttpRequest({
-      method: 'PATCH',
-      url: `${API_BASE}/trades/${trade.trade_id}/annotations`,
-      data: JSON.stringify(payload),
-      headers: { 'Content-Type': 'application/json' },
-      onload: (res) => {
-        if (res.status >= 200 && res.status < 300) {
-          console.log('[TD] ✅ Annotation saved for', trade.trade_id);
-
-          // Update local trade data with response
-          try {
-            const updated = JSON.parse(res.responseText);
-            annoTrades[annoIdx] = updated;
-          } catch (e) { /* ignore parse error */ }
-
-          const isLast = annoIdx >= annoTrades.length - 1;
-          if (isLast) {
-            overlay.remove();
-          } else {
-            annoIdx++;
-            annoForm = {};
-            renderAnnoModal();
-          }
-
-          // Refresh panel status
-          refreshStatus();
-        } else {
-          console.error('[TD] ❌ Annotation save failed:', res.status, res.responseText);
-          saveBtn.disabled = false;
-          saveBtn.textContent = '保存失败 — 重试';
-        }
-      },
-      onerror: (err) => {
-        console.error('[TD] ❌ Annotation save error:', err);
-        saveBtn.disabled = false;
-        saveBtn.textContent = '保存失败 — 重试';
-      },
-    });
+      await refreshStatus();
+    } catch (error) {
+      console.error('[TD] ❌ Annotation save error:', error);
+      saveBtn.disabled = false;
+      saveBtn.textContent = '保存失败 — 重试';
+    }
   }
 
   // ============================================================
   // Initialize
   // ============================================================
 
+  if (IS_TEST_MODE) {
+    globalThis.__TD_TEST_HOOKS__ = {
+      buildAnnotationPayload,
+      ensurePreArmReadyForCreate,
+      findNextIncompleteTradeIndex,
+    };
+    return;
+  }
+
   registerLifecycleCleanup();
+  bindPreArmShortcutOnce();
   initPanel();
 
   // Start DOM scraper after page settles (TV renders Account Manager lazily)
