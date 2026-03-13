@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.3.0
+// @version      0.3.1
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -336,7 +336,7 @@
       document.removeEventListener('keydown', onPreArmShortcut, true);
       preArmShortcutBound = false;
     }
-    closePreArmModal();
+    closePreArmView();
   }
 
   function registerLifecycleCleanup() {
@@ -839,10 +839,9 @@
   let playbookLoadPromise = null;
   let pendingTradeIdsInitialized = false;
   let seenPendingTradeIds = new Set();
-  let preArmModalEl = null;
+  let panelView = 'normal'; // 'normal' | 'prearm'
   let preArmSelectionId = '';
   let preArmShortcutBound = false;
-  let preArmModalPos = JSON.parse(localStorage.getItem('td_pre_arm_pos') || '{"top":"124px","left":"","right":"320px"}');
   let preArmCreatePending = false;
   let preArmCancelPending = false;
   let preArmChecklistSyncPending = false;
@@ -852,13 +851,6 @@
   let preArmActiveSnapshot = undefined;
   let preArmSyncError = '';
   const panelDragState = {
-    isDragging: false,
-    startX: 0,
-    startY: 0,
-    initialLeft: 0,
-    initialTop: 0,
-  };
-  const preArmDragState = {
     isDragging: false,
     startX: 0,
     startY: 0,
@@ -886,7 +878,7 @@
     GM_addStyle(`
       #td-panel {
         position: fixed;
-        width: 250px;
+        width: 320px;
         padding: 14px 16px;
         background: rgba(22, 22, 30, 0.96);
         color: #c8c8d0;
@@ -1478,7 +1470,7 @@
 
       /* Checklist rebuild overrides */
       #td-panel {
-        width: 290px;
+        width: 320px;
         padding: 14px 16px 16px;
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)),
@@ -1702,61 +1694,18 @@
         cursor: default;
         opacity: 0.7;
       }
-      #td-prearm-modal {
-        position: fixed;
-        width: 360px;
-        max-width: calc(100vw - 32px);
-        background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0)),
-          rgba(10, 14, 22, 0.88);
-        color: #edf1ff;
-        border: 1px solid rgba(88, 166, 255, 0.18);
-        border-radius: 16px;
-        backdrop-filter: blur(14px);
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.48);
-        z-index: 99999;
-        padding: 14px 14px 16px;
-        box-sizing: border-box;
-        font-family: 'IBM Plex Sans', 'SF Pro Text', -apple-system, sans-serif;
-      }
-      #td-prearm-modal .td-prearm-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 12px;
-        cursor: grab;
-      }
-      #td-prearm-modal .td-prearm-header:active {
-        cursor: grabbing;
-      }
-      #td-prearm-modal .td-prearm-title {
-        font-size: 14px;
-        font-weight: 700;
-      }
-      #td-prearm-modal .td-prearm-subtitle {
-        font-size: 11px;
-        color: #8e93ad;
-      }
-      #td-prearm-modal .td-prearm-close {
-        background: none;
-        border: none;
-        color: #8e93ad;
-        cursor: pointer;
-        font-size: 18px;
-        line-height: 1;
-      }
-      #td-prearm-modal .td-prearm-section {
+      /* Pre-arm panel view styles */
+      #td-panel .td-prearm-section {
         display: flex;
         flex-direction: column;
         gap: 10px;
       }
-      #td-prearm-modal .td-prearm-controls {
+      #td-panel .td-prearm-controls {
         display: grid;
         grid-template-columns: 1fr auto;
         gap: 8px;
       }
-      #td-prearm-modal .td-prearm-select,
+      #td-panel .td-prearm-select,
       .td-anno-select,
       .td-anno-note {
         width: 100%;
@@ -1769,17 +1718,17 @@
         font-size: 13px;
         font-family: inherit;
       }
-      #td-prearm-modal .td-prearm-select:focus,
+      #td-panel .td-prearm-select:focus,
       .td-anno-select:focus,
       .td-anno-note:focus {
         outline: none;
         border-color: rgba(88, 166, 255, 0.28);
       }
-      #td-prearm-modal .td-prearm-btn,
+      #td-panel .td-prearm-btn,
       .td-anno-save-btn {
         border-radius: 10px;
       }
-      #td-prearm-modal .td-prearm-btn {
+      #td-panel .td-prearm-btn {
         border: none;
         padding: 10px 14px;
         font-size: 12px;
@@ -1789,23 +1738,23 @@
         cursor: pointer;
         font-family: inherit;
       }
-      #td-prearm-modal .td-prearm-btn:disabled {
+      #td-panel .td-prearm-btn:disabled {
         opacity: 0.4;
         cursor: not-allowed;
       }
-      #td-prearm-modal .td-prearm-btn-secondary {
+      #td-panel .td-prearm-btn-secondary {
         background: rgba(255, 255, 255, 0.08);
         color: #edf1ff;
         border: 1px solid rgba(255, 255, 255, 0.12);
       }
-      #td-prearm-modal .td-prearm-chip-row {
+      #td-panel .td-prearm-chip-row {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 8px;
         font-size: 12px;
       }
-      #td-prearm-modal .td-prearm-chip {
+      #td-panel .td-prearm-chip {
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -1815,30 +1764,30 @@
         color: #3ad084;
         font-weight: 700;
       }
-      #td-prearm-modal .td-prearm-helper {
+      #td-panel .td-prearm-helper {
         font-size: 12px;
         color: #8e93ad;
         line-height: 1.6;
       }
-      #td-prearm-modal .td-prearm-status {
+      #td-panel .td-prearm-status {
         font-size: 12px;
         color: #8e93ad;
         line-height: 1.5;
         min-height: 18px;
       }
-      #td-prearm-modal .td-prearm-status-error {
+      #td-panel .td-prearm-status-error {
         color: #ffb84d;
       }
-      #td-prearm-modal .td-prearm-list {
+      #td-panel .td-prearm-list {
         display: flex;
         flex-direction: column;
         gap: 8px;
       }
-      #td-prearm-modal .td-prearm-actions {
+      #td-panel .td-prearm-actions {
         display: flex;
         justify-content: flex-end;
       }
-      #td-prearm-modal .td-prearm-item {
+      #td-panel .td-prearm-item {
         display: flex;
         align-items: flex-start;
         gap: 10px;
@@ -1848,13 +1797,31 @@
         border: 1px solid rgba(255, 255, 255, 0.06);
         cursor: pointer;
       }
-      #td-prearm-modal .td-prearm-item input {
+      #td-panel .td-prearm-item input {
         margin-top: 3px;
       }
-      #td-prearm-modal .td-prearm-item span {
+      #td-panel .td-prearm-item span {
         font-size: 12px;
         line-height: 1.5;
       }
+      #td-panel .td-prearm-pnl {
+        font-size: 13px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      #td-panel .td-prearm-zone-icon {
+        font-size: 14px;
+      }
+      #td-panel .td-prearm-zone-icon.td-zone-golden { color: #f1c40f; }
+      #td-panel .td-prearm-zone-icon.td-zone-overtime { color: #f39c12; }
+      /* Back button in pre-arm header */
+      #td-panel .td-prearm-back {
+        background: none; border: none; color: #8e93ad;
+        cursor: pointer; font-size: 16px; line-height: 1; padding: 0;
+      }
+      #td-panel .td-prearm-back:hover { color: #edf1ff; }
+      /* Pre-arm view always shows content (ignore collapsed class) */
+      #td-panel.td-collapsed .td-content.td-prearm-content { display: flex !important; }
       .td-anno-summary {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1996,6 +1963,10 @@
   }
 
   function buildPanelHTML(status, trades = lastTrades) {
+    if (panelView === 'prearm') {
+      return buildPreArmPanelHTML(status);
+    }
+
     if (!status) {
       return `
         <div class="td-header">
@@ -2076,22 +2047,115 @@
     `;
   }
 
+  function buildPreArmPanelHTML(status) {
+    const pnlClass = status && status.daily_net_pnl > 0
+      ? 'td-positive'
+      : status && status.daily_net_pnl < 0
+        ? 'td-negative'
+        : '';
+    const zone = status && status.trade_limit ? status.trade_limit.zone : 'waiting';
+    const zoneIcon = zone === 'golden' ? '★' : zone === 'overtime' ? '•' : zone === 'red' ? '🛑' : '';
+    const zoneIconClass = zone === 'golden' ? 'td-zone-golden' : zone === 'overtime' ? 'td-zone-overtime' : '';
+    const riskClass = status && status.risk && status.risk.state === 'red' ? 'td-risk-red' : 'td-risk-green';
+    const riskState = status && status.risk ? status.risk.state : 'green';
+
+    return `
+      <div class="td-header">
+        <div class="td-header-actions">
+          <button class="td-prearm-back" id="td-prearm-back">←</button>
+        </div>
+        <div class="td-header-actions">
+          <span class="td-prearm-pnl ${pnlClass}">${status ? formatMoney(status.daily_net_pnl, 2) : '—'}</span>
+          <span class="td-prearm-zone-icon ${zoneIconClass}">${zoneIcon}</span>
+          <span class="td-risk-dot ${riskClass}" title="Risk: ${riskState}"></span>
+        </div>
+      </div>
+      <div class="td-content td-prearm-content">
+        ${buildPreArmContentHTML()}
+      </div>
+    `;
+  }
+
+  function buildPreArmContentHTML() {
+    const active = getCurrentActivePreArm();
+    const displayed = getDisplayedPreArm(active);
+    const playbookId = active ? active.playbook_id : preArmSelectionId;
+    const playbook = findPlaybookDefinition(playbookId);
+    const checklistItems = active
+      ? active.checklist_items
+      : (playbook ? playbook.checklist_items : []);
+    const checklistState = displayed
+      ? displayed.checklist_state
+      : checklistItems.map(() => false);
+    const progress = displayed ? `${checklistState.filter(Boolean).length}/${checklistState.length}` : 'preview';
+    const options = buildPlaybookOptions(false).map((id) => `
+      <option value="${escapeHtml(id)}" ${id === playbookId ? 'selected' : ''}>${escapeHtml(getPlaybookLabel(id))}</option>
+    `).join('');
+    const statusDescriptor = getPreArmStatusDescriptor(active);
+
+    return `
+      <div class="td-prearm-section">
+        <div class="td-prearm-controls">
+          <select class="td-prearm-select" id="td-prearm-select" ${active ? 'disabled' : ''}>
+            ${options}
+          </select>
+          ${active ? '' : `<button class="td-prearm-btn" id="td-prearm-start" ${isPreArmShellBusy() || preArmHydrationPromise || !preArmSelectionId ? 'disabled' : ''}>${preArmCreatePending ? 'Saving...' : 'Start'}</button>`}
+        </div>
+        <div class="td-prearm-chip-row">
+          <span class="td-prearm-chip" id="td-prearm-chip">${displayed ? `${escapeHtml(displayed.playbook_name)} · ${progress}` : 'Preview'}</span>
+        </div>
+        <div id="td-prearm-status" class="${statusDescriptor.className}">${escapeHtml(statusDescriptor.text)}</div>
+        <div class="td-prearm-list">
+          ${checklistItems.map((item, index) => `
+            <label class="td-prearm-item">
+              <input type="checkbox" data-check-index="${index}" ${checklistState[index] ? 'checked' : ''} ${active && !isPreArmShellBusy() ? '' : 'disabled'}>
+              <span>${escapeHtml(item)}</span>
+            </label>
+          `).join('')}
+        </div>
+        ${active ? `<div class="td-prearm-actions">
+          <button class="td-prearm-btn td-prearm-btn-secondary" id="td-prearm-cancel" ${isPreArmShellBusy() ? 'disabled' : ''}>Cancel watch</button>
+        </div>` : ''}
+      </div>
+    `;
+  }
+
+  function bindPreArmPanelEvents() {
+    const select = panelEl.querySelector('#td-prearm-select');
+    if (select) {
+      select.addEventListener('change', (event) => {
+        preArmSelectionId = event.target.value;
+        rerenderPanel();
+      });
+    }
+
+    const startBtn = panelEl.querySelector('#td-prearm-start');
+    if (startBtn) {
+      startBtn.addEventListener('click', () => {
+        void startPreArmTracking();
+      });
+    }
+
+    const cancelBtn = panelEl.querySelector('#td-prearm-cancel');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        void cancelActivePreArm();
+      });
+    }
+
+    panelEl.querySelectorAll('[data-check-index]').forEach((input) => {
+      input.addEventListener('change', () => {
+        updatePreArmChecklist(Number(input.dataset.checkIndex));
+      });
+    });
+  }
+
   function buildPreArmButtonHTML(status) {
     const active = getDisplayedPreArm(status && status.active_pre_arm ? status.active_pre_arm : null);
     const checkedCount = active ? active.checklist_state.filter(Boolean).length : 0;
     const totalCount = active ? active.checklist_state.length : 0;
     const buttonClass = active ? 'td-setup-btn td-setup-active' : 'td-setup-btn';
     const label = active ? active.playbook_name : 'Watch setup';
-    let subLabel = 'Pick playbook and track the setup live';
-    if (active && preArmSyncError) {
-      subLabel = 'Save failed - will retry automatically';
-    } else if (active && preArmChecklistSyncPending) {
-      subLabel = `Saving ${checkedCount}/${totalCount}...`;
-    } else if (active && hasDirtyPreArmDraft(status.active_pre_arm)) {
-      subLabel = `Unsaved ${checkedCount}/${totalCount}`;
-    } else if (active) {
-      subLabel = `Checklist ${checkedCount}/${totalCount}`;
-    }
 
     return `
       <button class="${buttonClass}" id="td-setup-open">
@@ -2099,7 +2163,6 @@
           <span class="td-setup-btn-icon">🎯</span>
           <span class="td-setup-btn-copy">
             <span class="td-setup-btn-label">${escapeHtml(label)}</span>
-            <span class="td-setup-btn-sub">${escapeHtml(subLabel)}</span>
           </span>
         </span>
         <span class="td-setup-btn-hotkey">${getPreArmShortcutLabel()}</span>
@@ -2150,6 +2213,13 @@
   function onPanelClick(e) {
     if (!panelEl) return;
 
+    const backBtn = e.target.closest('#td-prearm-back');
+    if (backBtn && panelEl.contains(backBtn)) {
+      e.preventDefault();
+      void dismissPreArmView();
+      return;
+    }
+
     const toggleBtn = e.target.closest('.td-collapse-btn');
     if (toggleBtn && panelEl.contains(toggleBtn)) {
       e.stopPropagation();
@@ -2168,7 +2238,7 @@
     const setupBtn = e.target.closest('#td-setup-open');
     if (setupBtn && panelEl.contains(setupBtn)) {
       e.preventDefault();
-      void togglePreArmModal();
+      void togglePreArmView();
       return;
     }
 
@@ -2269,6 +2339,9 @@
   function renderPanel(status, trades) {
     if (!panelEl) return;
     panelEl.innerHTML = buildPanelHTML(status, trades);
+    if (panelView === 'prearm') {
+      bindPreArmPanelEvents();
+    }
     if (status && status.trade_limit && status.trade_limit.golden_complete) {
       panelEl.classList.add('td-golden-border');
     } else {
@@ -2308,16 +2381,16 @@
       clearPreArmDraft();
     }
 
-    if (!preArmModalEl) {
+    if (panelView !== 'prearm') {
       return;
     }
 
     if (!activePreArm && previousActiveId) {
-      closePreArmModal();
+      closePreArmView();
       return;
     }
 
-    renderPreArmModal();
+    rerenderPanel();
   }
 
   function setLocalActivePreArm(activePreArm) {
@@ -2357,15 +2430,15 @@
       } catch (error) {
         console.error('[TD] Failed to hydrate active pre-arm session:', error);
         preArmSyncError = getRequestErrorMessage(error, 'Failed to load active setup');
-        syncPreArmModalUi();
+        rerenderPanel();
         throw error;
       } finally {
         preArmHydrationPromise = null;
-        syncPreArmModalUi();
+        rerenderPanel();
       }
     })();
 
-    syncPreArmModalUi();
+    rerenderPanel();
     return preArmHydrationPromise;
   }
 
@@ -2836,7 +2909,7 @@
       return;
     }
     event.preventDefault();
-    void togglePreArmModal();
+    void togglePreArmView();
   }
 
   function isPreArmShellBusy() {
@@ -2883,117 +2956,31 @@
     return {
       className: 'td-prearm-status',
       text: active
-        ? `${getPreArmShortcutLabel()} hides this modal. Cancel watch removes the active setup.`
+        ? `${getPreArmShortcutLabel()} returns to main view. Cancel watch removes the active setup.`
         : 'Checklist starts once you click Start.',
     };
   }
 
-  function onPreArmMouseDown(event) {
-    if (!preArmModalEl || event.button !== 0) return;
-    const header = event.target.closest('.td-prearm-header');
-    if (!header || !preArmModalEl.contains(header)) return;
-    if (event.target.closest('.td-prearm-close')) return;
-
-    preArmDragState.isDragging = true;
-    preArmDragState.startX = event.clientX;
-    preArmDragState.startY = event.clientY;
-
-    const rect = preArmModalEl.getBoundingClientRect();
-    preArmDragState.initialLeft = rect.left;
-    preArmDragState.initialTop = rect.top;
-    preArmModalEl.style.right = 'auto';
-    event.preventDefault();
+  function closePreArmView() {
+    panelView = 'normal';
+    rerenderPanel();
   }
 
-  function onPreArmMouseMove(event) {
-    if (!preArmModalEl || !preArmDragState.isDragging) return;
-    const dx = event.clientX - preArmDragState.startX;
-    const dy = event.clientY - preArmDragState.startY;
-    preArmModalEl.style.left = `${preArmDragState.initialLeft + dx}px`;
-    preArmModalEl.style.top = `${preArmDragState.initialTop + dy}px`;
-  }
-
-  function onPreArmMouseUp() {
-    if (!preArmModalEl || !preArmDragState.isDragging) return;
-    preArmDragState.isDragging = false;
-    preArmModalPos = {
-      top: preArmModalEl.style.top,
-      left: preArmModalEl.style.left,
-      right: '',
-    };
-    localStorage.setItem('td_pre_arm_pos', JSON.stringify(preArmModalPos));
-  }
-
-  function closePreArmModal() {
-    if (!preArmModalEl) return;
-    document.removeEventListener('mousemove', onPreArmMouseMove);
-    document.removeEventListener('mouseup', onPreArmMouseUp);
-    preArmDragState.isDragging = false;
-    preArmModalEl.remove();
-    preArmModalEl = null;
-  }
-
-  function syncPreArmModalUi() {
-    if (!preArmModalEl) return;
-
+  async function dismissPreArmView() {
     const active = getCurrentActivePreArm();
-    const displayed = getDisplayedPreArm(active);
-    const statusDescriptor = getPreArmStatusDescriptor(active);
-    const chip = preArmModalEl.querySelector('#td-prearm-chip');
-    const statusEl = preArmModalEl.querySelector('#td-prearm-status');
-    const startBtn = preArmModalEl.querySelector('#td-prearm-start');
-    const select = preArmModalEl.querySelector('#td-prearm-select');
-    const cancelBtn = preArmModalEl.querySelector('#td-prearm-cancel');
-    const checklistState = displayed ? displayed.checklist_state : [];
-    const progress = displayed ? `${checklistState.filter(Boolean).length}/${checklistState.length}` : 'Preview';
-
-    if (chip) {
-      chip.textContent = displayed ? `${displayed.playbook_name} · ${progress}` : 'Preview';
+    const shouldFlush = !!active && hasDirtyPreArmDraft(active);
+    closePreArmView();
+    if (!shouldFlush) return;
+    try {
+      await flushPreArmDraft();
+    } catch (error) {
+      console.error('[TD] Failed to flush pre-arm draft on dismiss:', error);
     }
-
-    if (statusEl) {
-      statusEl.className = statusDescriptor.className;
-      statusEl.textContent = statusDescriptor.text;
-    }
-
-    if (startBtn) {
-      startBtn.disabled = isPreArmShellBusy() || !!preArmHydrationPromise || !preArmSelectionId;
-      startBtn.textContent = preArmCreatePending ? 'Saving...' : 'Start';
-    }
-
-    if (select) {
-      select.disabled = !!active || isPreArmShellBusy();
-    }
-
-    if (cancelBtn) {
-      cancelBtn.disabled = !active || isPreArmShellBusy();
-    }
-
-    preArmModalEl.querySelectorAll('[data-check-index]').forEach((input) => {
-      const index = Number(input.dataset.checkIndex);
-      input.checked = !!checklistState[index];
-      input.disabled = !active || isPreArmShellBusy();
-    });
   }
 
-  async function openPreArmModal() {
-    if (!preArmModalEl) {
-      preArmModalEl = document.createElement('div');
-      preArmModalEl.id = 'td-prearm-modal';
-      preArmModalEl.style.top = preArmModalPos.top;
-      if (preArmModalPos.left) {
-        preArmModalEl.style.left = preArmModalPos.left;
-      }
-      if (preArmModalPos.right) {
-        preArmModalEl.style.right = preArmModalPos.right;
-      }
-      document.body.appendChild(preArmModalEl);
-      preArmModalEl.addEventListener('mousedown', onPreArmMouseDown);
-      document.addEventListener('mousemove', onPreArmMouseMove);
-      document.addEventListener('mouseup', onPreArmMouseUp);
-    }
-
-    renderPreArmModal();
+  async function openPreArmView() {
+    panelView = 'prearm';
+    rerenderPanel();
 
     const [playbooksResult] = await Promise.allSettled([
       ensurePlaybooksLoaded(),
@@ -3001,24 +2988,24 @@
     ]);
     if (playbooksResult.status === 'rejected') {
       const error = playbooksResult.reason;
-      console.error('[TD] Failed to load playbooks for pre-arm modal:', error);
+      console.error('[TD] Failed to load playbooks for pre-arm view:', error);
       preArmSyncError = getRequestErrorMessage(error, 'Failed to load playbooks');
-      renderPreArmModal();
+      rerenderPanel();
       return;
     }
 
     if (!preArmSelectionId && playbooksCache[0]) {
       preArmSelectionId = playbooksCache[0].id;
     }
-    renderPreArmModal();
+    rerenderPanel();
   }
 
-  async function togglePreArmModal() {
-    if (!preArmModalEl) {
-      await openPreArmModal();
+  async function togglePreArmView() {
+    if (panelView !== 'prearm') {
+      await openPreArmView();
       return;
     }
-    void dismissPreArmModal();
+    void dismissPreArmView();
   }
 
   async function startPreArmTracking() {
@@ -3027,35 +3014,32 @@
       const activePreArm = await ensurePreArmReadyForCreate();
       if (activePreArm) {
         preArmSyncError = '';
-        renderPreArmModal();
+        rerenderPanel();
         return;
       }
     } catch (error) {
       console.error('[TD] Blocking pre-arm create until active session read succeeds:', error);
-      syncPreArmModalUi();
+      rerenderPanel();
       return;
     }
 
     preArmCreatePending = true;
     preArmSyncError = '';
-    syncPreArmModalUi();
+    rerenderPanel();
     try {
       const response = await requestJson('POST', '/pre-arm', {
         data: { playbook_id: preArmSelectionId },
       });
       setLocalActivePreArm(response.active_pre_arm);
       syncPreArmDraftWithServer(response.active_pre_arm);
-      if (lastStatus) {
-        rerenderPanel();
-      }
-      renderPreArmModal();
+      rerenderPanel();
       void refreshStatus();
     } catch (error) {
       console.error('[TD] Failed to create pre-arm session:', error);
       preArmSyncError = getRequestErrorMessage(error, 'Failed to start setup');
     } finally {
       preArmCreatePending = false;
-      syncPreArmModalUi();
+      rerenderPanel();
     }
   }
 
@@ -3068,14 +3052,12 @@
     if (!draft || !hasDirtyPreArmDraft(active)) {
       preArmSyncError = '';
       rerenderPanel();
-      syncPreArmModalUi();
       return active;
     }
 
     preArmChecklistSyncPending = true;
     preArmSyncError = '';
     rerenderPanel();
-    syncPreArmModalUi();
 
     preArmFlushPromise = (async () => {
       try {
@@ -3086,7 +3068,6 @@
         syncPreArmDraftWithServer(response.active_pre_arm);
         preArmSyncError = '';
         rerenderPanel();
-        syncPreArmModalUi();
         if (eventSendQueue.length > 0) {
           setTimeout(() => {
             void drainEventSendQueue();
@@ -3097,13 +3078,11 @@
         console.error('[TD] Failed to update pre-arm session:', error);
         preArmSyncError = getRequestErrorMessage(error, 'Failed to save setup draft');
         rerenderPanel();
-        syncPreArmModalUi();
         throw error;
       } finally {
         preArmChecklistSyncPending = false;
         preArmFlushPromise = null;
         rerenderPanel();
-        syncPreArmModalUi();
       }
     })();
 
@@ -3130,31 +3109,18 @@
     preArmSyncError = '';
     persistPreArmDraft();
     rerenderPanel();
-    syncPreArmModalUi();
-  }
-
-  async function dismissPreArmModal() {
-    const active = getCurrentActivePreArm();
-    const shouldFlush = !!active && hasDirtyPreArmDraft(active);
-    closePreArmModal();
-    if (!shouldFlush) return;
-    try {
-      await flushPreArmDraft();
-    } catch (error) {
-      console.error('[TD] Failed to flush pre-arm draft on dismiss:', error);
-    }
   }
 
   async function cancelActivePreArm() {
     const active = getCurrentActivePreArm();
     if (!active || isPreArmShellBusy()) {
-      closePreArmModal();
+      closePreArmView();
       return;
     }
 
     preArmCancelPending = true;
     preArmSyncError = '';
-    syncPreArmModalUi();
+    rerenderPanel();
     try {
       await requestJson('DELETE', `/pre-arm/${active.id}`);
       setLocalActivePreArm(null);
@@ -3165,103 +3131,15 @@
         void drainEventSendQueue();
       }
       preArmSyncError = '';
-      if (lastStatus) {
-        rerenderPanel();
-      }
-      closePreArmModal();
+      closePreArmView();
       void refreshStatus();
     } catch (error) {
       console.error('[TD] Failed to cancel pre-arm session:', error);
       preArmSyncError = getRequestErrorMessage(error, 'Failed to cancel setup');
     } finally {
       preArmCancelPending = false;
-      syncPreArmModalUi();
+      rerenderPanel();
     }
-  }
-
-  function renderPreArmModal() {
-    if (!preArmModalEl) return;
-
-    const active = getCurrentActivePreArm();
-    const displayed = getDisplayedPreArm(active);
-    const playbookId = active ? active.playbook_id : preArmSelectionId;
-    const playbook = findPlaybookDefinition(playbookId);
-    const checklistItems = active
-      ? active.checklist_items
-      : (playbook ? playbook.checklist_items : []);
-    const checklistState = displayed
-      ? displayed.checklist_state
-      : checklistItems.map(() => false);
-    const progress = displayed ? `${checklistState.filter(Boolean).length}/${checklistState.length}` : 'preview';
-    const options = buildPlaybookOptions(false).map((id) => `
-      <option value="${escapeHtml(id)}" ${id === playbookId ? 'selected' : ''}>${escapeHtml(getPlaybookLabel(id))}</option>
-    `).join('');
-    const statusDescriptor = getPreArmStatusDescriptor(active);
-
-    preArmModalEl.innerHTML = `
-      <div class="td-prearm-header">
-        <div>
-          <div class="td-prearm-title">🎯 Watch Setup</div>
-          <div class="td-prearm-subtitle">${active ? 'Checklist edits stay local first, then save when you hide the modal or before the next fill is sent.' : 'Choose a playbook and start the checklist before entry.'}</div>
-        </div>
-        <button class="td-prearm-close" id="td-prearm-close">✕</button>
-      </div>
-      <div class="td-prearm-section">
-        <div class="td-prearm-controls">
-          <select class="td-prearm-select" id="td-prearm-select" ${active ? 'disabled' : ''}>
-            ${options}
-          </select>
-          ${active ? '' : `<button class="td-prearm-btn" id="td-prearm-start" ${isPreArmShellBusy() || preArmHydrationPromise || !preArmSelectionId ? 'disabled' : ''}>${preArmCreatePending ? 'Saving...' : 'Start'}</button>`}
-        </div>
-        <div class="td-prearm-chip-row">
-          <span class="td-prearm-chip" id="td-prearm-chip">${displayed ? `${escapeHtml(displayed.playbook_name)} · ${progress}` : 'Preview'}</span>
-        </div>
-        <div id="td-prearm-status" class="${statusDescriptor.className}">${escapeHtml(statusDescriptor.text)}</div>
-        <div class="td-prearm-list">
-          ${checklistItems.map((item, index) => `
-            <label class="td-prearm-item">
-              <input type="checkbox" data-check-index="${index}" ${checklistState[index] ? 'checked' : ''} ${active && !isPreArmShellBusy() ? '' : 'disabled'}>
-              <span>${escapeHtml(item)}</span>
-            </label>
-          `).join('')}
-        </div>
-        ${active ? `<div class="td-prearm-actions">
-          <button class="td-prearm-btn td-prearm-btn-secondary" id="td-prearm-cancel" ${isPreArmShellBusy() ? 'disabled' : ''}>Cancel watch</button>
-        </div>` : ''}
-      </div>
-    `;
-
-    preArmModalEl.querySelector('#td-prearm-close').addEventListener('click', () => {
-      void dismissPreArmModal();
-    });
-
-    const select = preArmModalEl.querySelector('#td-prearm-select');
-    if (select) {
-      select.addEventListener('change', (event) => {
-        preArmSelectionId = event.target.value;
-        renderPreArmModal();
-      });
-    }
-
-    const startBtn = preArmModalEl.querySelector('#td-prearm-start');
-    if (startBtn) {
-      startBtn.addEventListener('click', () => {
-        void startPreArmTracking();
-      });
-    }
-
-    const cancelBtn = preArmModalEl.querySelector('#td-prearm-cancel');
-    if (cancelBtn) {
-      cancelBtn.addEventListener('click', () => {
-        void cancelActivePreArm();
-      });
-    }
-
-    preArmModalEl.querySelectorAll('[data-check-index]').forEach((input) => {
-      input.addEventListener('change', () => {
-        updatePreArmChecklist(Number(input.dataset.checkIndex));
-      });
-    });
   }
 
   async function openAnnotationModal(options = {}) {
