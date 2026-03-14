@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.3.1
+// @version      0.3.2
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -1006,6 +1006,21 @@
       #td-panel .td-dot-gold { color: #f1c40f; }
       #td-panel .td-dot-orange { color: #e67e22; }
       #td-panel .td-dot-red { color: #e74c3c; }
+      /* Overflow alert badge */
+      #td-panel .td-overflow-badge {
+        display: inline-block;
+        background: rgba(231, 76, 60, 0.2);
+        color: #e74c3c;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 10px;
+        animation: td-pulse 2s ease-in-out infinite;
+      }
+      @keyframes td-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+      }
       #td-panel .td-dots-label {
         font-size: 11px;
         color: #8888a0;
@@ -2022,6 +2037,17 @@
     const count = tl.trades_today;
     const zone = tl.zone;
 
+    // Overflow: replace stars with alert badge
+    if (count > maxDots) {
+      return `
+        <div class="td-zone-row">
+          <span class="td-overflow-badge">⚠ ${count} trades</span>
+          <span class="td-dots-label">Red zone</span>
+        </div>
+      `;
+    }
+
+    // Normal: star rendering
     let dots = '';
     for (let i = 0; i < maxDots; i++) {
       if (i < count) {
