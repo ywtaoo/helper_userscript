@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.3.2
+// @version      0.3.5
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -21,6 +21,7 @@
   // Configuration
   // ============================================================
   const API_BASE = 'http://localhost:18080/api';
+  const REVIEW_PAGE_URL = 'http://localhost:18080/review/';
   const REFRESH_INTERVAL = 30000; // 30s panel refresh
   const RETRY_QUEUE_KEY = 'td_retry_queue';
   const PRE_ARM_DRAFT_KEY = 'td_pre_arm_draft';
@@ -30,6 +31,7 @@
   const STATUS_REQUEST_TIMEOUT_MS = 8000;
   const EVENT_REQUEST_TIMEOUT_MS = 8000;
   const DEFAULT_REQUEST_TIMEOUT_MS = 8000;
+  const PENDING_REVIEW_TARGET_REFRESH_TTL_MS = 5 * 60 * 1000;
   const PLAN_ADHERENCE_OPTIONS = ['Yes', 'Partial', 'No'];
   const MINDSET_OPTIONS = ['Calm', 'FOMO', 'Revenge', 'Fatigued'];
   const ERROR_TYPES = ['Untagged', 'Chase', 'Early Entry', 'Late Entry', 'Oversize', 'Move Stop', 'Add to Loser', 'Overtrade', 'Rule Violation', 'Bad Exit', 'Other'];
@@ -226,6 +228,77 @@
       return `${fallback} (${error.statusText})`;
     }
     return fallback;
+  }
+
+  function formatPendingReviewLabel(count) {
+    const safeCount = Number(count);
+    if (!Number.isFinite(safeCount) || safeCount <= 0) return '';
+    return safeCount === 1
+      ? '1 day unreviewed'
+      : `${Math.floor(safeCount)} days unreviewed`;
+  }
+
+  function getFirstPendingReviewDate(reviewDays) {
+    if (!Array.isArray(reviewDays)) return null;
+    const firstPending = reviewDays.find((item) => (
+      item &&
+      item.review_completed === false &&
+      typeof item.trading_date === 'string' &&
+      item.trading_date
+    ));
+    return firstPending ? firstPending.trading_date : null;
+  }
+
+  function shouldRefreshPendingReviewTarget(count, options = {}) {
+    const safeCount = Number(count);
+    if (!Number.isFinite(safeCount) || safeCount <= 0) return false;
+
+    const {
+      lastCount = pendingReviewTargetCount,
+      lastFetchedAt = pendingReviewTargetFetchedAt,
+      now = Date.now(),
+      ttlMs = PENDING_REVIEW_TARGET_REFRESH_TTL_MS,
+    } = options;
+
+    if (lastCount !== safeCount) return true;
+    if (!Number.isFinite(lastFetchedAt) || lastFetchedAt <= 0) return true;
+    return now - lastFetchedAt >= ttlMs;
+  }
+
+  function buildReviewPageUrl(tradingDate) {
+    if (typeof tradingDate !== 'string' || !tradingDate) {
+      return REVIEW_PAGE_URL;
+    }
+    const encodedDate = encodeURIComponent(tradingDate);
+    return `${REVIEW_PAGE_URL}?date=${encodedDate}`;
+  }
+
+  function buildPendingReviewBadgeHTML(status) {
+    const label = formatPendingReviewLabel(status && status.pending_reviews);
+    if (!label) return '';
+
+    return `
+      <button class="td-review-badge" id="td-review-open" title="${escapeHtml(label)}">
+        ${escapeHtml(label)}
+      </button>
+    `;
+  }
+
+  function openReviewPage(tradingDate) {
+    if (typeof document === 'undefined' || !document.body || typeof document.createElement !== 'function') {
+      console.warn('[TD] Review page open skipped: document unavailable');
+      return false;
+    }
+
+    const link = document.createElement('a');
+    link.href = buildReviewPageUrl(tradingDate);
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    return true;
   }
 
   function getPreArmShortcutLabel() {
@@ -839,6 +912,9 @@
   let playbookLoadPromise = null;
   let pendingTradeIdsInitialized = false;
   let seenPendingTradeIds = new Set();
+  let pendingReviewTargetDate = null;
+  let pendingReviewTargetFetchedAt = 0;
+  let pendingReviewTargetCount = 0;
   let panelView = 'normal'; // 'normal' | 'prearm'
   let preArmSelectionId = '';
   let preArmShortcutBound = false;
@@ -917,7 +993,30 @@
       .td-header-actions {
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 8px;
+      }
+      #td-panel .td-review-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(243, 156, 18, 0.28);
+        background: rgba(243, 156, 18, 0.14);
+        color: #f8c471;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1.2;
+        letter-spacing: 0.02em;
+        font-family: inherit;
+        cursor: pointer;
+        transition: background 0.18s, border-color 0.18s, color 0.18s;
+        white-space: nowrap;
+      }
+      #td-panel .td-review-badge:hover {
+        background: rgba(243, 156, 18, 0.2);
+        border-color: rgba(243, 156, 18, 0.4);
+        color: #fde3a7;
       }
       .td-collapse-btn {
         cursor: pointer;
@@ -1997,11 +2096,13 @@
     const tl = status.trade_limit || { trades_today: 0, zone: 'waiting', golden_complete: false };
     const dotsHTML = buildTradeDotsHTML(tl);
     const setupAverage = calculateSetupAverage(trades);
+    const reviewBadgeHTML = buildPendingReviewBadgeHTML(status);
 
     return `
       <div class="td-header">
         <span class="td-title">📊 Discipline</span>
         <div class="td-header-actions">
+          ${reviewBadgeHTML}
           <span class="td-risk-dot ${riskClass}" title="Risk: ${status.risk.state}"></span>
           <span class="td-collapse-btn" title="Toggle Panel">${isCollapsed ? '➕' : '➖'}</span>
         </div>
@@ -2275,6 +2376,13 @@
       return;
     }
 
+    const reviewBtn = e.target.closest('#td-review-open');
+    if (reviewBtn && panelEl.contains(reviewBtn)) {
+      e.preventDefault();
+      openReviewPage(pendingReviewTargetDate);
+      return;
+    }
+
     const tradeRow = e.target.closest('[data-trade-id]');
     if (tradeRow && panelEl.contains(tradeRow)) {
       e.preventDefault();
@@ -2354,7 +2462,9 @@
       typeof status.risk.extra_warning === 'string' &&
       status.trade_limit &&
       typeof status.trade_limit.trades_today === 'number' &&
-      typeof status.trade_limit.zone === 'string'
+      typeof status.trade_limit.zone === 'string' &&
+      typeof status.pending_annotations === 'number' &&
+      typeof status.pending_reviews === 'number'
     );
   }
 
@@ -2507,6 +2617,33 @@
         showDegraded('Status format error');
         return;
       }
+
+      const pendingReviewCount = status.pending_reviews;
+      let nextPendingReviewTargetDate = pendingReviewCount > 0
+        ? pendingReviewTargetDate
+        : null;
+      if (pendingReviewCount > 0) {
+        if (shouldRefreshPendingReviewTarget(pendingReviewCount)) {
+          if (pendingReviewTargetCount !== pendingReviewCount) {
+            nextPendingReviewTargetDate = null;
+          }
+          try {
+            const reviewDaysPayload = await requestJson('GET', '/review/days', { timeout: STATUS_REQUEST_TIMEOUT_MS });
+            const resolvedPendingDate = getFirstPendingReviewDate(reviewDaysPayload);
+            nextPendingReviewTargetDate = resolvedPendingDate || null;
+          } catch (error) {
+            console.warn('[TD] Failed to refresh pending review target:', error);
+          } finally {
+            pendingReviewTargetFetchedAt = Date.now();
+            pendingReviewTargetCount = pendingReviewCount;
+          }
+        }
+      } else {
+        pendingReviewTargetFetchedAt = 0;
+        pendingReviewTargetCount = 0;
+      }
+
+      pendingReviewTargetDate = nextPendingReviewTargetDate;
 
       lastStatus = status;
       setLocalActivePreArm(status.active_pre_arm);
@@ -3440,8 +3577,14 @@
   if (IS_TEST_MODE) {
     globalThis.__TD_TEST_HOOKS__ = {
       buildAnnotationPayload,
+      buildReviewPageUrl,
+      buildPanelHTML,
       ensurePreArmReadyForCreate,
+      formatPendingReviewLabel,
       findNextIncompleteTradeIndex,
+      getFirstPendingReviewDate,
+      isValidStatusPayload,
+      shouldRefreshPendingReviewTarget,
     };
     return;
   }
