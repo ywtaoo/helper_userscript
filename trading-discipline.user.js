@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.3.6
+// @version      0.3.7
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -326,8 +326,10 @@
   //   Symbol:  td[data-label="Symbol"] .titleContent-oThzYPsJ  (special wrapper)
 
   const FILLED_TABLE_SEL    = 'table[data-name="TRADOVATE.orders-table"]';
+  const POSITIONS_TABLE_SEL = 'table[data-name="TRADOVATE.positions-table"]';
   const ACCOUNT_MANAGER_SEL = '.accountManager-vCXUCd2i';
   const SCRAPE_INTERVAL_MS  = 5000; // poll every 5s
+  const SUPPORTED_SYMBOLS   = new Set(['ES', 'NQ', 'MES', 'MNQ', 'GC', 'MGC']);
 
   // Track the last submitted snapshot per order so cumulative fills can update in place.
   const sentOrderSnapshots = new Map();
@@ -410,6 +412,7 @@
       preArmShortcutBound = false;
     }
     closePreArmView();
+    currentOpenPosition = null;
   }
 
   function registerLifecycleCleanup() {
@@ -599,6 +602,7 @@
     lastPollRunAt = Date.now();
     try {
       pollFilledOrders();
+      pollOpenPositions();
     } finally {
       pollInProgress = false;
       if (pollPending) {
@@ -766,6 +770,149 @@
   }
 
   // ============================================================
+  // 1b. DOM Scraper — Positions Tab (open position indicator)
+  // ============================================================
+
+  function pollOpenPositions() {
+    // Use cached selector if we previously discovered the table
+    let table = document.querySelector(cachedPositionTableSel || POSITIONS_TABLE_SEL);
+
+    // Fallback: search for any table with "position" in data-name
+    if (!table && !cachedPositionTableSel) {
+      const accountManager = document.querySelector(ACCOUNT_MANAGER_SEL);
+      if (accountManager) {
+        const candidates = accountManager.querySelectorAll('table[data-name]');
+        for (const t of candidates) {
+          if (t.dataset.name.toLowerCase().includes('position')) {
+            table = t;
+            cachedPositionTableSel = `table[data-name="${t.dataset.name}"]`;
+            console.log('[TD] Position table discovered, caching selector:', cachedPositionTableSel);
+            break;
+          }
+        }
+        // Discovery logging: show all data-name tables once
+        if (!positionTableDiscoveryLogged) {
+          positionTableDiscoveryLogged = true;
+          const names = Array.from(candidates).map((t) => t.dataset.name);
+          console.log('[TD] Position table discovery — available data-name tables:', names);
+          if (!table) {
+            console.warn('[TD] No position table found. Selector tried:', POSITIONS_TABLE_SEL);
+          }
+        }
+      }
+    }
+
+    if (!table) {
+      if (currentOpenPosition !== null) {
+        currentOpenPosition = null;
+        renderPanel(lastStatus, lastTrades);
+      }
+      return;
+    }
+
+    const row = table.querySelector('tbody tr.ka-row');
+    if (!row) {
+      if (currentOpenPosition !== null) {
+        currentOpenPosition = null;
+        renderPanel(lastStatus, lastTrades);
+      }
+      return;
+    }
+
+    // Discovery: log all data-label values once
+    if (!positionLabelDiscoveryLogged) {
+      positionLabelDiscoveryLogged = true;
+      const labels = Array.from(row.querySelectorAll('td[data-label]')).map((td) => td.dataset.label);
+      console.log('[TD] Position row data-labels:', labels);
+    }
+
+    try {
+      // Symbol — uses same special wrapper as filled orders
+      const symbolEl = row.querySelector('.titleContent-oThzYPsJ');
+      const rawSymbol = symbolEl?.textContent?.trim() || '';
+      // Strip contract suffix (e.g. "ESH5" → "ES", "MESH5" → "MES")
+      const symbol = rawSymbol.replace(/[A-Z]\d+$/, '');
+
+      if (!symbol || !SUPPORTED_SYMBOLS.has(symbol)) {
+        if (currentOpenPosition !== null) {
+          currentOpenPosition = null;
+          renderPanel(lastStatus, lastTrades);
+        }
+        return;
+      }
+
+      // Side
+      const sideEl = row.querySelector('[data-label="Side"] .ka-cell-text')
+        || row.querySelector('[data-label="B/S"] .ka-cell-text');
+      const rawSide = sideEl?.textContent?.trim() || '';
+      const sideLower = rawSide.toLowerCase();
+      let side;
+      if (sideLower === 'buy' || sideLower === 'b' || sideLower === 'long' || sideLower === 'l') {
+        side = 'Long';
+      } else if (sideLower === 'sell' || sideLower === 's' || sideLower === 'short') {
+        side = 'Short';
+      } else {
+        // Unknown side value; treat as no valid position
+        if (currentOpenPosition !== null) {
+          currentOpenPosition = null;
+          renderPanel(lastStatus, lastTrades);
+        }
+        return;
+      }
+
+      // Qty
+      const qtyEl = row.querySelector('[data-label="Qty"] .ka-cell-text')
+        || row.querySelector('[data-label="Net Pos"] .ka-cell-text');
+      const qty = Math.abs(parseFloat(qtyEl?.textContent?.trim() || '0'));
+
+      // Entry price
+      const priceEl = row.querySelector('[data-label="Avg Price"] .ka-cell-text')
+        || row.querySelector('[data-label="Entry Price"] .ka-cell-text')
+        || row.querySelector('[data-label="Avg Fill Price"] .ka-cell-text');
+      const entryPrice = parseFloat((priceEl?.textContent?.trim() || '0').replace(/,/g, ''));
+
+      // Unrealized P&L
+      const pnlEl = row.querySelector('[data-label="P&L"] .ka-cell-text')
+        || row.querySelector('[data-label="Unrealized P&L"] .ka-cell-text')
+        || row.querySelector('[data-label="P/L"] .ka-cell-text');
+      const pnlText = pnlEl?.textContent?.trim() || '';
+      const parsedPnl = pnlText ? parseFloat(pnlText.replace(/[$,]/g, '')) : null;
+      const unrealizedPnl = Number.isFinite(parsedPnl) ? parsedPnl : null;
+
+      if (qty <= 0 || isNaN(entryPrice) || entryPrice <= 0) {
+        if (currentOpenPosition !== null) {
+          currentOpenPosition = null;
+          renderPanel(lastStatus, lastTrades);
+        }
+        return;
+      }
+
+      // Check if position actually changed
+      const prev = currentOpenPosition;
+      const changed = !prev
+        || prev.symbol !== symbol
+        || prev.side !== side
+        || prev.qty !== qty
+        || prev.entryPrice !== entryPrice
+        || prev.unrealizedPnl !== unrealizedPnl;
+
+      if (changed) {
+        currentOpenPosition = {
+          symbol,
+          side,
+          qty,
+          entryPrice,
+          unrealizedPnl,
+          firstSeenAt: (prev && prev.symbol === symbol && prev.side === side) ? prev.firstSeenAt : new Date().toISOString(),
+        };
+        renderPanel(lastStatus, lastTrades);
+      }
+    } catch (e) {
+      console.error('[TD] Error scraping position row:', e);
+    }
+  }
+
+  // ============================================================
   // 2. Retry Queue (degraded fallback)
   // ============================================================
 
@@ -927,6 +1074,10 @@
   let preArmHydrationPromise = null;
   let preArmActiveSnapshot = undefined;
   let preArmSyncError = '';
+  let currentOpenPosition = null; // { symbol, side, qty, entryPrice, unrealizedPnl, firstSeenAt }
+  let positionTableDiscoveryLogged = false;
+  let positionLabelDiscoveryLogged = false;
+  let cachedPositionTableSel = null; // cached selector after first successful discovery
   const panelDragState = {
     isDragging: false,
     startX: 0,
@@ -1824,6 +1975,46 @@
         text-align: center;
         font-size: 12px;
       }
+      /* Open position indicator */
+      #td-panel .td-open-position {
+        background: rgba(59, 130, 246, 0.08);
+        border: 1px solid rgba(59, 130, 246, 0.25);
+        border-radius: 10px;
+        padding: 10px 12px;
+        animation: td-pulse 2s ease-in-out infinite;
+      }
+      #td-panel .td-open-position-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+      #td-panel .td-open-position-label {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: rgba(59, 130, 246, 0.8);
+      }
+      #td-panel .td-side-long { color: #3ad084; font-weight: 700; font-size: 13px; }
+      #td-panel .td-side-short { color: #ff6b63; font-weight: 700; font-size: 13px; }
+      #td-panel .td-open-position-detail {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        font-size: 13px;
+        color: #c8cad5;
+      }
+      #td-panel .td-open-position-detail .td-trade-symbol {
+        font-weight: 700;
+        color: #e0e2ea;
+      }
+      #td-panel .td-open-position-pnl {
+        font-size: 13px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        margin-top: 4px;
+      }
       #td-panel .td-footer-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2175,6 +2366,7 @@
       <div class="td-divider"></div>
       ${buildPreArmButtonHTML(status)}
       <div class="td-divider"></div>
+      ${buildOpenPositionHTML()}
       ${buildTradeListHTML(trades)}
       <div class="td-divider"></div>
       <div class="td-footer-grid">
@@ -2352,6 +2544,33 @@
         </span>
         <span class="td-setup-btn-hotkey">${getPreArmShortcutLabel()}</span>
       </button>
+    `;
+  }
+
+  function buildOpenPositionHTML() {
+    if (!currentOpenPosition) return '';
+    const pos = currentOpenPosition;
+    const sideClass = pos.side === 'Long' ? 'td-side-long' : 'td-side-short';
+    const priceFormatted = pos.entryPrice.toLocaleString('en-US', { minimumFractionDigits: 2 });
+    const timeFormatted = formatClockTime(pos.firstSeenAt);
+    const pnlLine = pos.unrealizedPnl !== null
+      ? `<div class="td-open-position-pnl ${pos.unrealizedPnl >= 0 ? 'td-positive' : 'td-negative'}">${formatMoney(pos.unrealizedPnl, 2)}</div>`
+      : '';
+
+    return `
+      <div class="td-open-position">
+        <div class="td-open-position-header">
+          <span class="td-open-position-label">OPEN</span>
+          <span class="${sideClass}">${escapeHtml(pos.side)}</span>
+        </div>
+        <div class="td-open-position-detail">
+          <span class="td-trade-symbol">${escapeHtml(pos.symbol)}</span>
+          <span>${escapeHtml(String(pos.qty))} @ ${escapeHtml(priceFormatted)}</span>
+          <span style="margin-left:auto;color:#8e93ad;font-size:12px">${timeFormatted}</span>
+        </div>
+        ${pnlLine}
+      </div>
+      <div class="td-divider"></div>
     `;
   }
 
