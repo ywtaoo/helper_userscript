@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.3.5
+// @version      0.3.6
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -524,6 +524,7 @@
               rememberSentOrderSnapshot(item.orderId, item.snapshotKey);
             }
             console.log('[TD] ✅ Fill event sent to backend:', item.fillData.fill_id);
+            showFillFeedback(item.fillData);
             refreshStatus();
             if (item.onSuccess) item.onSuccess();
             continue;
@@ -1120,6 +1121,59 @@
         0%, 100% { opacity: 1; }
         50% { opacity: 0.6; }
       }
+
+      /* Fill capture flash */
+      @keyframes td-fill-flash {
+        0%   { border-color: rgba(46, 204, 113, 0.8); box-shadow: 0 0 18px rgba(46, 204, 113, 0.5), 0 8px 32px rgba(0, 0, 0, 0.6); }
+        100% { border-color: rgba(255, 255, 255, 0.08); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6); }
+      }
+      @keyframes td-fill-flash-golden {
+        0%   { border-color: rgba(46, 204, 113, 0.8); box-shadow: 0 0 18px rgba(46, 204, 113, 0.5), 0 8px 32px rgba(0, 0, 0, 0.6); }
+        100% { border-color: rgba(241, 196, 15, 0.3); box-shadow: 0 0 12px rgba(241, 196, 15, 0.35), 0 8px 32px rgba(0, 0, 0, 0.6); }
+      }
+      #td-panel.td-fill-flash {
+        animation: td-fill-flash 0.8s ease-out forwards;
+      }
+      #td-panel.td-golden-border.td-fill-flash {
+        animation: td-fill-flash-golden 0.8s ease-out forwards;
+      }
+
+      /* Fill toast notifications */
+      #td-fill-toasts {
+        position: fixed;
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        pointer-events: none;
+      }
+      @keyframes td-toast-in {
+        from { opacity: 0; transform: translateY(-8px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes td-toast-out {
+        from { opacity: 1; transform: translateY(0); }
+        to   { opacity: 0; transform: translateY(-8px); }
+      }
+      .td-fill-toast {
+        background: rgba(22, 22, 30, 0.95);
+        border: 1px solid rgba(46, 204, 113, 0.3);
+        border-radius: 8px;
+        padding: 6px 12px;
+        font-family: 'Inter', 'SF Pro Text', -apple-system, sans-serif;
+        font-size: 12px;
+        color: #c8c8d0;
+        backdrop-filter: blur(12px);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        animation: td-toast-in 0.25s ease-out;
+        white-space: nowrap;
+      }
+      .td-fill-toast.td-toast-removing {
+        animation: td-toast-out 0.3s ease-in forwards;
+      }
+      .td-fill-toast .td-toast-buy { color: #2ecc71; font-weight: 600; }
+      .td-fill-toast .td-toast-sell { color: #e74c3c; font-weight: 600; }
+
       #td-panel .td-dots-label {
         font-size: 11px;
         color: #8888a0;
@@ -2060,6 +2114,10 @@
     panelEl.innerHTML = buildPanelHTML(null);
     document.body.appendChild(panelEl);
 
+    const toastContainer = document.createElement('div');
+    toastContainer.id = 'td-fill-toasts';
+    document.body.appendChild(toastContainer);
+
     bindPanelInteractionsOnce();
 
     // Initial fetch
@@ -2415,6 +2473,7 @@
     const dy = e.clientY - panelDragState.startY;
     panelEl.style.left = `${panelDragState.initialLeft + dx}px`;
     panelEl.style.top = `${panelDragState.initialTop + dy}px`;
+    repositionToasts();
   }
 
   function onPanelMouseUp() {
@@ -2472,6 +2531,53 @@
     return payload && Array.isArray(payload.trades);
   }
 
+  function repositionToasts() {
+    const tc = document.getElementById('td-fill-toasts');
+    if (!tc || !panelEl) return;
+    const rect = panelEl.getBoundingClientRect();
+    tc.style.top = (rect.bottom + 6) + 'px';
+    tc.style.left = rect.left + 'px';
+    tc.style.width = rect.width + 'px';
+  }
+
+  function showFillFeedback(fillData) {
+    // Border flash
+    if (panelEl) {
+      panelEl.classList.remove('td-fill-flash');
+      void panelEl.offsetWidth; // reflow to restart animation on rapid fills
+      panelEl.classList.add('td-fill-flash');
+      panelEl.addEventListener('animationend', function onEnd() {
+        panelEl.classList.remove('td-fill-flash');
+        panelEl.removeEventListener('animationend', onEnd);
+      });
+    }
+
+    // Toast notification
+    const toastContainer = document.getElementById('td-fill-toasts');
+    if (!toastContainer || !fillData) return;
+
+    repositionToasts();
+
+    const symbol = escapeHtml(fillData.symbol || '??');
+    const action = (fillData.action || '').toUpperCase();
+    const actionClass = action === 'BUY' ? 'td-toast-buy' : 'td-toast-sell';
+    const qty = escapeHtml(String(fillData.qty || fillData.quantity || '?'));
+    const rawPrice = Number(fillData.price);
+    const price = escapeHtml(rawPrice ? rawPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '?');
+
+    const toast = document.createElement('div');
+    toast.className = 'td-fill-toast';
+    toast.innerHTML = symbol + ' <span class="' + actionClass + '">' + escapeHtml(action) + '</span> ' + qty + ' @ ' + price;
+    toastContainer.appendChild(toast);
+
+    setTimeout(function () {
+      toast.classList.add('td-toast-removing');
+      toast.addEventListener('animationend', function () {
+        toast.remove();
+      });
+    }, 2500);
+  }
+
   function renderPanel(status, trades) {
     if (!panelEl) return;
     panelEl.innerHTML = buildPanelHTML(status, trades);
@@ -2483,6 +2589,7 @@
     } else {
       panelEl.classList.remove('td-golden-border');
     }
+    repositionToasts();
   }
 
   function syncPendingTradeState(trades) {
