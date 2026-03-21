@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.3.7
+// @version      0.3.8
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -1107,17 +1107,17 @@
       #td-panel {
         position: fixed;
         width: 320px;
-        padding: 14px 16px;
-        background: rgba(22, 22, 30, 0.96);
-        color: #c8c8d0;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 10px;
+        padding: 14px 16px 16px;
+        background: rgba(19, 23, 34, 0.95);
+        color: #d1d4dc;
+        border: 1px solid #2a2e39;
+        border-radius: 14px;
         backdrop-filter: blur(12px);
         z-index: 99999;
-        font-family: 'Inter', 'SF Pro Text', -apple-system, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
         font-size: 13px;
-        line-height: 1.6;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+        line-height: 1.5;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
         user-select: none;
         box-sizing: border-box;
       }
@@ -1140,7 +1140,7 @@
       }
       #td-panel:not(.td-collapsed) .td-header {
         margin-bottom: 10px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        border-bottom: 1px solid #2a2e39;
       }
       .td-header-actions {
         display: flex;
@@ -1151,29 +1151,30 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        padding: 4px 8px;
-        border-radius: 999px;
-        border: 1px solid rgba(243, 156, 18, 0.28);
-        background: rgba(243, 156, 18, 0.14);
-        color: #f8c471;
+        padding: 1px 6px;
+        border-radius: 3px;
+        border: 1px solid rgba(255, 179, 0, 0.4);
+        background: rgba(255, 179, 0, 0.2);
+        color: #ffb300;
         font-size: 10px;
-        font-weight: 700;
+        font-weight: 600;
         line-height: 1.2;
-        letter-spacing: 0.02em;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
         font-family: inherit;
         cursor: pointer;
-        transition: background 0.18s, border-color 0.18s, color 0.18s;
+        transition: background 0.15s, border-color 0.15s, color 0.15s;
         white-space: nowrap;
       }
       #td-panel .td-review-badge:hover {
-        background: rgba(243, 156, 18, 0.2);
-        border-color: rgba(243, 156, 18, 0.4);
-        color: #fde3a7;
+        background: rgba(255, 179, 0, 0.28);
+        border-color: rgba(255, 179, 0, 0.5);
+        color: #ffd54f;
       }
       .td-collapse-btn {
         cursor: pointer;
         opacity: 0.5;
-        transition: opacity 0.2s;
+        transition: opacity 0.15s;
         font-size: 10px;
       }
       .td-collapse-btn:hover {
@@ -1182,18 +1183,18 @@
       #td-panel .td-title {
         font-size: 13px;
         font-weight: 600;
-        color: #e4e4ed;
-        letter-spacing: 0.3px;
+        color: #d1d4dc;
+        letter-spacing: 0.02em;
       }
       #td-panel .td-risk-dot {
         width: 10px;
         height: 10px;
         border-radius: 50%;
         display: inline-block;
-        transition: background 0.3s;
+        transition: background 0.15s;
       }
-      #td-panel .td-risk-green { background: #2ecc71; }
-      #td-panel .td-risk-red { background: #e74c3c; }
+      #td-panel .td-risk-green { background: #26a69a; }
+      #td-panel .td-risk-red { background: #ef5350; }
       #td-panel .td-row {
         display: flex;
         justify-content: space-between;
@@ -1201,7 +1202,7 @@
         padding: 6px 0;
       }
       #td-panel .td-label {
-        color: #8888a0;
+        color: #787b86;
         font-size: 12px;
       }
       #td-panel .td-value {
@@ -1210,10 +1211,10 @@
         font-variant-numeric: tabular-nums;
         text-align: right;
       }
-      #td-panel .td-positive { color: #2ecc71; }
-      #td-panel .td-negative { color: #e74c3c; }
-      #td-panel .td-orange { color: #f39c12; }
-      #td-panel .td-neutral { color: #c8c8d0; }
+      #td-panel .td-positive { color: #26a69a; }
+      #td-panel .td-negative { color: #ef5350; }
+      #td-panel .td-orange { color: #ffb300; }
+      #td-panel .td-neutral { color: #d1d4dc; }
       #td-panel .td-last5 {
         display: flex;
         gap: 6px;
@@ -1227,12 +1228,12 @@
         font-size: 11px;
         font-weight: 600;
       }
-      #td-panel .td-chip-w { background: rgba(46, 204, 113, 0.15); color: #2ecc71; }
-      #td-panel .td-chip-l { background: rgba(231, 76, 60, 0.15); color: #e74c3c; }
-      #td-panel .td-chip-be { background: rgba(243, 156, 18, 0.15); color: #f39c12; }
+      #td-panel .td-chip-w { background: rgba(38, 166, 154, 0.2); color: #26a69a; }
+      #td-panel .td-chip-l { background: rgba(239, 83, 80, 0.2); color: #ef5350; }
+      #td-panel .td-chip-be { background: rgba(255, 179, 0, 0.2); color: #ffb300; }
       #td-panel .td-degraded {
         font-size: 10px;
-        color: #666;
+        color: #4a4e5a;
         text-align: center;
         padding-top: 6px;
       }
@@ -1253,19 +1254,22 @@
         font-size: 14px;
         line-height: 1;
       }
-      #td-panel .td-dot-empty { color: #555; }
-      #td-panel .td-dot-gold { color: #f1c40f; }
-      #td-panel .td-dot-orange { color: #e67e22; }
-      #td-panel .td-dot-red { color: #e74c3c; }
+      #td-panel .td-dot-empty { color: #4a4e5a; }
+      #td-panel .td-dot-gold { color: #ffb300; }
+      #td-panel .td-dot-orange { color: #ffb300; }
+      #td-panel .td-dot-red { color: #ef5350; }
       /* Overflow alert badge */
       #td-panel .td-overflow-badge {
         display: inline-block;
-        background: rgba(231, 76, 60, 0.2);
-        color: #e74c3c;
-        font-size: 12px;
-        font-weight: 700;
-        padding: 2px 8px;
-        border-radius: 10px;
+        background: rgba(239, 83, 80, 0.2);
+        color: #ef5350;
+        font-size: 10px;
+        font-weight: 600;
+        padding: 1px 6px;
+        border: 1px solid rgba(239, 83, 80, 0.4);
+        border-radius: 3px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
         animation: td-pulse 2s ease-in-out infinite;
       }
       @keyframes td-pulse {
@@ -1275,12 +1279,12 @@
 
       /* Fill capture flash */
       @keyframes td-fill-flash {
-        0%   { border-color: rgba(46, 204, 113, 0.8); box-shadow: 0 0 18px rgba(46, 204, 113, 0.5), 0 8px 32px rgba(0, 0, 0, 0.6); }
-        100% { border-color: rgba(255, 255, 255, 0.08); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6); }
+        0%   { border-color: rgba(38, 166, 154, 0.8); box-shadow: 0 0 18px rgba(38, 166, 154, 0.5), 0 16px 48px rgba(0, 0, 0, 0.45); }
+        100% { border-color: #2a2e39; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45); }
       }
       @keyframes td-fill-flash-golden {
-        0%   { border-color: rgba(46, 204, 113, 0.8); box-shadow: 0 0 18px rgba(46, 204, 113, 0.5), 0 8px 32px rgba(0, 0, 0, 0.6); }
-        100% { border-color: rgba(241, 196, 15, 0.3); box-shadow: 0 0 12px rgba(241, 196, 15, 0.35), 0 8px 32px rgba(0, 0, 0, 0.6); }
+        0%   { border-color: rgba(38, 166, 154, 0.8); box-shadow: 0 0 18px rgba(38, 166, 154, 0.5), 0 16px 48px rgba(0, 0, 0, 0.45); }
+        100% { border-color: rgba(255, 179, 0, 0.3); box-shadow: 0 0 12px rgba(255, 179, 0, 0.35), 0 16px 48px rgba(0, 0, 0, 0.45); }
       }
       #td-panel.td-fill-flash {
         animation: td-fill-flash 0.8s ease-out forwards;
@@ -1307,13 +1311,13 @@
         to   { opacity: 0; transform: translateY(-8px); }
       }
       .td-fill-toast {
-        background: rgba(22, 22, 30, 0.95);
-        border: 1px solid rgba(46, 204, 113, 0.3);
-        border-radius: 8px;
+        background: rgba(19, 23, 34, 0.95);
+        border: 1px solid rgba(38, 166, 154, 0.3);
+        border-radius: 4px;
         padding: 6px 12px;
-        font-family: 'Inter', 'SF Pro Text', -apple-system, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
         font-size: 12px;
-        color: #c8c8d0;
+        color: #d1d4dc;
         backdrop-filter: blur(12px);
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
         animation: td-toast-in 0.25s ease-out;
@@ -1322,27 +1326,27 @@
       .td-fill-toast.td-toast-removing {
         animation: td-toast-out 0.3s ease-in forwards;
       }
-      .td-fill-toast .td-toast-buy { color: #2ecc71; font-weight: 600; }
-      .td-fill-toast .td-toast-sell { color: #e74c3c; font-weight: 600; }
+      .td-fill-toast .td-toast-buy { color: #26a69a; font-weight: 600; }
+      .td-fill-toast .td-toast-sell { color: #ef5350; font-weight: 600; }
 
       #td-panel .td-dots-label {
         font-size: 11px;
-        color: #8888a0;
+        color: #787b86;
       }
 
       /* Golden zone border */
       #td-panel.td-golden-border {
-        box-shadow: 0 0 12px rgba(241, 196, 15, 0.35), 0 8px 32px rgba(0, 0, 0, 0.6);
-        border-color: rgba(241, 196, 15, 0.3);
+        box-shadow: 0 0 12px rgba(255, 179, 0, 0.35), 0 16px 48px rgba(0, 0, 0, 0.45);
+        border-color: rgba(255, 179, 0, 0.3);
       }
       /* Golden complete banner */
       #td-panel .td-golden-msg {
-        background: rgba(241, 196, 15, 0.1);
-        border: 1px solid rgba(241, 196, 15, 0.25);
-        border-radius: 6px;
+        background: rgba(255, 179, 0, 0.1);
+        border: 1px solid rgba(255, 179, 0, 0.25);
+        border-radius: 4px;
         padding: 6px 10px;
         font-size: 12px;
-        color: #f1c40f;
+        color: #ffb300;
         text-align: center;
         margin: 8px 0 2px;
       }
@@ -1359,21 +1363,21 @@
         backdrop-filter: blur(4px);
       }
       #td-limit-modal {
-        background: #1a1a2e;
-        border-radius: 12px;
+        background: #1e222d;
+        border-radius: 8px;
         padding: 24px 28px;
         max-width: 420px;
         width: 90%;
-        color: #e4e4ed;
-        font-family: 'Inter', -apple-system, sans-serif;
+        color: #d1d4dc;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
       }
       #td-limit-modal.td-limit-overtime {
-        border: 1px solid rgba(230, 126, 34, 0.3);
-        box-shadow: 0 8px 40px rgba(230, 126, 34, 0.2);
+        border: 1px solid rgba(255, 179, 0, 0.3);
+        box-shadow: 0 8px 40px rgba(255, 179, 0, 0.2);
       }
       #td-limit-modal.td-limit-red {
-        border: 1px solid rgba(231, 76, 60, 0.3);
-        box-shadow: 0 8px 40px rgba(231, 76, 60, 0.2);
+        border: 1px solid rgba(239, 83, 80, 0.3);
+        box-shadow: 0 8px 40px rgba(239, 83, 80, 0.2);
       }
       #td-limit-modal .td-modal-icon {
         font-size: 32px;
@@ -1387,21 +1391,21 @@
         margin-bottom: 12px;
       }
       #td-limit-modal .td-limit-overtime .td-modal-title,
-      #td-limit-modal.td-limit-overtime .td-modal-title { color: #e67e22; }
-      #td-limit-modal.td-limit-red .td-modal-title { color: #e74c3c; }
+      #td-limit-modal.td-limit-overtime .td-modal-title { color: #ffb300; }
+      #td-limit-modal.td-limit-red .td-modal-title { color: #ef5350; }
       #td-limit-modal .td-modal-body {
         font-size: 13px;
         line-height: 1.7;
-        color: #b0b0c0;
+        color: #787b86;
         margin-bottom: 20px;
       }
       #td-limit-modal .td-limit-reason {
         width: 100%;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 6px;
+        background: #131722;
+        border: 1px solid #2a2e39;
+        border-radius: 4px;
         padding: 8px 10px;
-        color: #e4e4ed;
+        color: #d1d4dc;
         font-size: 13px;
         font-family: inherit;
         resize: vertical;
@@ -1409,7 +1413,8 @@
         margin-bottom: 16px;
         box-sizing: border-box;
       }
-      #td-limit-modal .td-limit-reason::placeholder { color: #666; }
+      #td-limit-modal .td-limit-reason::placeholder { color: #4a4e5a; }
+      #td-limit-modal .td-limit-reason:focus { outline: none; border-color: #2962ff; }
       #td-limit-modal .td-modal-btns {
         display: flex;
         gap: 10px;
@@ -1417,23 +1422,24 @@
       }
       #td-limit-modal .td-btn {
         padding: 8px 20px;
-        border-radius: 6px;
+        border-radius: 4px;
         font-size: 13px;
         font-weight: 600;
         cursor: pointer;
         border: none;
-        transition: opacity 0.2s;
+        transition: opacity 0.15s;
       }
       #td-limit-modal .td-btn:hover { opacity: 0.85; }
       #td-limit-modal .td-btn-cancel {
-        background: rgba(255, 255, 255, 0.1);
-        color: #c8c8d0;
+        background: #252a38;
+        border: 1px solid #2a2e39;
+        color: #d1d4dc;
       }
       #td-limit-modal .td-btn-confirm {
         color: #fff;
       }
-      #td-limit-modal.td-limit-overtime .td-btn-confirm { background: #e67e22; }
-      #td-limit-modal.td-limit-red .td-btn-confirm { background: #e74c3c; }
+      #td-limit-modal.td-limit-overtime .td-btn-confirm { background: #ffb300; color: #131722; }
+      #td-limit-modal.td-limit-red .td-btn-confirm { background: #ef5350; }
       #td-limit-modal .td-btn-confirm:disabled {
         opacity: 0.35;
         cursor: not-allowed;
@@ -1441,7 +1447,7 @@
 
       #td-panel .td-divider {
         height: 1px;
-        background: rgba(255, 255, 255, 0.06);
+        background: #2a2e39;
         margin: 10px 0;
       }
 
@@ -1454,27 +1460,29 @@
         width: 100%;
         padding: 7px 0;
         margin-top: 8px;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 6px;
-        color: #b0b0c0;
+        background: #252a38;
+        border: 1px solid #2a2e39;
+        border-radius: 4px;
+        color: #787b86;
         font-size: 12px;
         font-weight: 600;
         cursor: pointer;
-        transition: background 0.2s, color 0.2s;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
         font-family: inherit;
       }
       #td-panel .td-anno-btn:hover {
-        background: rgba(255, 255, 255, 0.12);
-        color: #e4e4ed;
+        background: #2e3348;
+        border-color: #3d4560;
+        color: #d1d4dc;
       }
       #td-panel .td-anno-badge {
-        background: #e67e22;
-        color: #fff;
+        background: rgba(255, 179, 0, 0.2);
+        color: #ffb300;
         font-size: 10px;
-        font-weight: 700;
+        font-weight: 600;
         padding: 1px 6px;
-        border-radius: 8px;
+        border-radius: 3px;
+        border: 1px solid rgba(255, 179, 0, 0.4);
         min-width: 16px;
         text-align: center;
       }
@@ -1491,14 +1499,14 @@
         backdrop-filter: blur(4px);
       }
       .td-anno-modal {
-        background: #1a1a2e;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 12px;
+        background: #1e222d;
+        border: 1px solid #2a2e39;
+        border-radius: 8px;
         padding: 20px 24px;
         max-width: 480px;
         width: 92%;
-        color: #e4e4ed;
-        font-family: 'Inter', -apple-system, sans-serif;
+        color: #d1d4dc;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
         font-size: 13px;
         max-height: 90vh;
         overflow-y: auto;
@@ -1510,7 +1518,7 @@
         align-items: center;
         margin-bottom: 14px;
         padding-bottom: 10px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        border-bottom: 1px solid #2a2e39;
       }
       .td-anno-modal-title {
         font-size: 15px;
@@ -1519,14 +1527,14 @@
       .td-anno-close {
         cursor: pointer;
         font-size: 18px;
-        color: #888;
+        color: #787b86;
         background: none;
         border: none;
         padding: 0 4px;
         line-height: 1;
-        transition: color 0.2s;
+        transition: color 0.15s;
       }
-      .td-anno-close:hover { color: #e4e4ed; }
+      .td-anno-close:hover { color: #d1d4dc; }
 
       /* Trade navigator */
       .td-anno-nav {
@@ -1535,23 +1543,23 @@
         justify-content: space-between;
         padding: 8px 12px;
         margin-bottom: 14px;
-        background: rgba(255, 255, 255, 0.04);
-        border-radius: 8px;
+        background: #131722;
+        border-radius: 4px;
         gap: 8px;
       }
       .td-anno-nav-arrow {
         cursor: pointer;
         font-size: 16px;
-        color: #888;
+        color: #787b86;
         background: none;
         border: none;
         padding: 2px 8px;
         border-radius: 4px;
-        transition: background 0.2s, color 0.2s;
+        transition: background 0.15s, color 0.15s;
       }
       .td-anno-nav-arrow:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.1);
-        color: #e4e4ed;
+        background: #252a38;
+        color: #d1d4dc;
       }
       .td-anno-nav-arrow:disabled {
         opacity: 0.3;
@@ -1563,7 +1571,7 @@
       }
       .td-anno-nav-counter {
         font-size: 11px;
-        color: #888;
+        color: #787b86;
         margin-bottom: 2px;
       }
       .td-anno-nav-trade {
@@ -1571,7 +1579,7 @@
         font-weight: 600;
       }
       .td-anno-nav-check {
-        color: #2ecc71;
+        color: #26a69a;
         margin-left: 6px;
       }
 
@@ -1585,17 +1593,17 @@
       }
       .td-anno-field-label {
         font-size: 12px;
-        color: #8888a0;
+        color: #787b86;
         white-space: nowrap;
         min-width: 70px;
       }
       .td-anno-select {
         flex: 1;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 6px;
+        background: #131722;
+        border: 1px solid #2a2e39;
+        border-radius: 4px;
         padding: 6px 10px;
-        color: #e4e4ed;
+        color: #d1d4dc;
         font-size: 13px;
         font-family: inherit;
         cursor: pointer;
@@ -1604,7 +1612,7 @@
       }
       .td-anno-select:focus {
         outline: none;
-        border-color: rgba(255, 255, 255, 0.25);
+        border-color: #2962ff;
       }
 
       /* Multi-select trigger dropdown */
@@ -1614,9 +1622,9 @@
         max-width: 240px;
       }
       .td-anno-multiselect-display {
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 6px;
+        background: #131722;
+        border: 1px solid #2a2e39;
+        border-radius: 4px;
         padding: 4px 10px;
         min-height: 32px;
         display: flex;
@@ -1625,20 +1633,21 @@
         gap: 4px;
         cursor: pointer;
         font-size: 13px;
-        color: #8888a0;
+        color: #787b86;
       }
       .td-anno-multiselect-display:hover {
-        border-color: rgba(255, 255, 255, 0.25);
+        border-color: #2962ff;
       }
       .td-anno-chip {
         display: inline-flex;
         align-items: center;
         gap: 3px;
-        background: rgba(230, 126, 34, 0.25);
-        color: #e67e22;
-        border-radius: 4px;
-        padding: 2px 6px;
-        font-size: 11px;
+        background: rgba(255, 179, 0, 0.2);
+        color: #ffb300;
+        border-radius: 3px;
+        padding: 1px 6px;
+        font-size: 10px;
+        font-weight: 600;
         white-space: nowrap;
       }
       .td-anno-chip-x {
@@ -1654,9 +1663,9 @@
         left: 0;
         right: 0;
         margin-top: 4px;
-        background: #2a2a3e;
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        border-radius: 6px;
+        background: #1e222d;
+        border: 1px solid #2a2e39;
+        border-radius: 4px;
         overflow: hidden;
         z-index: 100001;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
@@ -1667,17 +1676,17 @@
       .td-anno-multiselect-option {
         padding: 6px 10px;
         font-size: 12px;
-        color: #b0b0c0;
+        color: #787b86;
         cursor: pointer;
         display: flex;
         align-items: center;
         gap: 6px;
       }
       .td-anno-multiselect-option:hover {
-        background: rgba(255, 255, 255, 0.08);
+        background: #252a38;
       }
       .td-anno-multiselect-option.selected {
-        color: #e67e22;
+        color: #ffb300;
       }
       .td-anno-multiselect-check {
         width: 14px;
@@ -1687,12 +1696,14 @@
 
       /* Discipline checks section */
       .td-anno-checks-title {
-        font-size: 12px;
+        font-size: 10px;
         font-weight: 600;
-        color: #8888a0;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: #787b86;
         margin: 12px 0 8px;
         padding-top: 10px;
-        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        border-top: 1px solid #2a2e39;
       }
       .td-anno-check-row {
         display: flex;
@@ -1703,7 +1714,7 @@
       }
       .td-anno-check-label {
         font-size: 12px;
-        color: #b0b0c0;
+        color: #787b86;
         flex: 1;
       }
       .td-anno-btn-group {
@@ -1716,29 +1727,29 @@
         font-size: 11px;
         font-weight: 600;
         cursor: pointer;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        background: rgba(255, 255, 255, 0.04);
-        color: #888;
-        transition: all 0.15s;
+        border: 1px solid #2a2e39;
+        background: #252a38;
+        color: #787b86;
+        transition: background 0.15s, border-color 0.15s, color 0.15s;
       }
       .td-anno-btn-group button:hover {
-        background: rgba(255, 255, 255, 0.1);
-        color: #c8c8d0;
+        background: #2e3348;
+        color: #d1d4dc;
       }
       .td-anno-btn-active-yes {
-        background: rgba(46, 204, 113, 0.2) !important;
-        border-color: rgba(46, 204, 113, 0.4) !important;
-        color: #2ecc71 !important;
+        background: rgba(38, 166, 154, 0.2) !important;
+        border-color: rgba(38, 166, 154, 0.4) !important;
+        color: #26a69a !important;
       }
       .td-anno-btn-active-partial {
-        background: rgba(243, 156, 18, 0.2) !important;
-        border-color: rgba(243, 156, 18, 0.4) !important;
-        color: #f39c12 !important;
+        background: rgba(255, 179, 0, 0.2) !important;
+        border-color: rgba(255, 179, 0, 0.4) !important;
+        color: #ffb300 !important;
       }
       .td-anno-btn-active-no {
-        background: rgba(231, 76, 60, 0.2) !important;
-        border-color: rgba(231, 76, 60, 0.4) !important;
-        color: #e74c3c !important;
+        background: rgba(239, 83, 80, 0.2) !important;
+        border-color: rgba(239, 83, 80, 0.4) !important;
+        color: #ef5350 !important;
       }
 
       /* Score display */
@@ -1748,12 +1759,12 @@
         justify-content: space-between;
         padding: 10px 0;
         margin-top: 8px;
-        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        border-top: 1px solid #2a2e39;
       }
       .td-anno-score-label {
         font-size: 13px;
         font-weight: 600;
-        color: #8888a0;
+        color: #787b86;
       }
       .td-anno-score-value {
         font-size: 18px;
@@ -1762,7 +1773,7 @@
       }
       .td-anno-error-hint {
         font-size: 11px;
-        color: #f39c12;
+        color: #ffb300;
         font-style: italic;
       }
 
@@ -1771,33 +1782,23 @@
         width: 100%;
         padding: 10px 0;
         margin-top: 12px;
-        background: #3498db;
+        background: #2962ff;
         border: none;
-        border-radius: 8px;
+        border-radius: 4px;
         color: #fff;
         font-size: 14px;
-        font-weight: 700;
+        font-weight: 600;
         cursor: pointer;
-        transition: opacity 0.2s;
+        transition: background 0.15s;
         font-family: inherit;
       }
-      .td-anno-save-btn:hover { opacity: 0.85; }
+      .td-anno-save-btn:hover { background: #1e50d8; }
       .td-anno-save-btn:disabled {
         opacity: 0.35;
         cursor: not-allowed;
       }
 
-      /* Checklist rebuild overrides */
-      #td-panel {
-        width: 320px;
-        padding: 14px 16px 16px;
-        background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)),
-          rgba(16, 18, 28, 0.95);
-        border-radius: 14px;
-        font-family: 'IBM Plex Sans', 'SF Pro Text', -apple-system, sans-serif;
-        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
-      }
+      /* Panel layout overrides */
       #td-panel .td-row {
         gap: 12px;
         padding: 4px 0;
@@ -1824,24 +1825,23 @@
         width: 100%;
         padding: 9px 11px;
         margin-top: 8px;
-        background: linear-gradient(135deg, rgba(88, 166, 255, 0.12), rgba(88, 166, 255, 0.04));
-        border: 1px solid rgba(88, 166, 255, 0.2);
-        border-radius: 10px;
-        color: #edf1ff;
+        background: rgba(41, 98, 255, 0.08);
+        border: 1px solid rgba(41, 98, 255, 0.2);
+        border-radius: 4px;
+        color: #d1d4dc;
         font-size: 12px;
-        font-weight: 700;
+        font-weight: 600;
         cursor: pointer;
-        transition: transform 0.18s, background 0.18s, border-color 0.18s;
+        transition: background 0.15s, border-color 0.15s;
         font-family: inherit;
       }
       #td-panel .td-setup-btn:hover {
-        transform: translateY(-1px);
-        background: linear-gradient(135deg, rgba(88, 166, 255, 0.18), rgba(88, 166, 255, 0.08));
-        border-color: rgba(88, 166, 255, 0.32);
+        background: rgba(41, 98, 255, 0.14);
+        border-color: rgba(41, 98, 255, 0.32);
       }
       #td-panel .td-setup-btn.td-setup-active {
-        border-color: rgba(58, 208, 132, 0.26);
-        background: linear-gradient(135deg, rgba(58, 208, 132, 0.14), rgba(58, 208, 132, 0.05));
+        border-color: rgba(38, 166, 154, 0.26);
+        background: rgba(38, 166, 154, 0.1);
       }
       #td-panel .td-setup-btn-main {
         display: flex;
@@ -1854,8 +1854,8 @@
         justify-content: center;
         width: 24px;
         height: 24px;
-        border-radius: 7px;
-        background: rgba(255, 255, 255, 0.08);
+        border-radius: 4px;
+        background: #252a38;
         font-size: 13px;
       }
       #td-panel .td-setup-btn-copy {
@@ -1867,7 +1867,7 @@
       #td-panel .td-setup-btn-sub,
       #td-panel .td-setup-btn-hotkey {
         font-size: 11px;
-        color: #8e93ad;
+        color: #787b86;
       }
       #td-panel .td-setup-btn-hotkey {
         letter-spacing: 0.08em;
@@ -1885,22 +1885,21 @@
         gap: 12px;
         width: 100%;
         padding: 8px 10px;
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 10px;
-        background: rgba(255, 255, 255, 0.04);
-        color: #edf1ff;
+        border: 1px solid #2a2e39;
+        border-radius: 4px;
+        background: #1e222d;
+        color: #d1d4dc;
         cursor: pointer;
-        transition: transform 0.18s, background 0.18s, border-color 0.18s;
+        transition: background 0.15s, border-color 0.15s;
         box-sizing: border-box;
         font-family: inherit;
       }
       #td-panel .td-trade-row:hover {
-        transform: translateY(-1px);
-        background: rgba(255, 255, 255, 0.07);
-        border-color: rgba(255, 255, 255, 0.1);
+        background: #252a38;
+        border-color: #3d4560;
       }
       #td-panel .td-trade-row.td-trade-pending {
-        border-color: rgba(255, 184, 77, 0.26);
+        border-color: rgba(255, 179, 0, 0.26);
       }
       #td-panel .td-trade-main {
         display: flex;
@@ -1915,7 +1914,7 @@
       }
       #td-panel .td-trade-symbol {
         font-size: 12px;
-        color: #8e93ad;
+        color: #787b86;
         letter-spacing: 0.06em;
       }
       #td-panel .td-trade-metrics {
@@ -1929,16 +1928,18 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        border-radius: 999px;
-        font-size: 11px;
-        font-weight: 700;
+        border-radius: 3px;
+        font-size: 10px;
+        font-weight: 600;
         white-space: nowrap;
         font-variant-numeric: tabular-nums;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
       }
       #td-panel .td-trade-result-badge {
         min-width: 24px;
         padding: 1px 6px;
-        background: rgba(255, 255, 255, 0.08);
+        background: #252a38;
       }
       #td-panel .td-trade-pnl {
         font-size: 12px;
@@ -1946,40 +1947,42 @@
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
       }
-      #td-panel .td-result-w { color: #3ad084; }
-      #td-panel .td-result-l { color: #ff6b63; }
-      #td-panel .td-result-be { color: #ffb84d; }
-      #td-panel .td-result-na { color: #8e93ad; }
-      #td-panel .td-neutral { color: #8e93ad; }
+      #td-panel .td-result-w { color: #26a69a; }
+      #td-panel .td-result-l { color: #ef5350; }
+      #td-panel .td-result-be { color: #ffb300; }
+      #td-panel .td-result-na { color: #787b86; }
+      #td-panel .td-neutral { color: #787b86; }
       #td-panel .td-setup-pill {
         min-width: 46px;
         padding: 2px 8px;
       }
       #td-panel .td-setup-complete {
-        background: rgba(58, 208, 132, 0.12);
-        color: #3ad084;
+        background: rgba(38, 166, 154, 0.2);
+        color: #26a69a;
+        border: 1px solid rgba(38, 166, 154, 0.4);
       }
       #td-panel .td-setup-partial {
-        background: rgba(255, 184, 77, 0.14);
-        color: #ffb84d;
+        background: rgba(255, 179, 0, 0.2);
+        color: #ffb300;
+        border: 1px solid rgba(255, 179, 0, 0.4);
       }
       #td-panel .td-setup-none {
-        background: rgba(255, 255, 255, 0.06);
-        color: #8e93ad;
+        background: #252a38;
+        color: #787b86;
       }
       #td-panel .td-empty-state {
         padding: 12px 10px;
-        border-radius: 10px;
-        background: rgba(255, 255, 255, 0.04);
-        color: #8e93ad;
+        border-radius: 4px;
+        background: #1e222d;
+        color: #787b86;
         text-align: center;
         font-size: 12px;
       }
       /* Open position indicator */
       #td-panel .td-open-position {
-        background: rgba(59, 130, 246, 0.08);
-        border: 1px solid rgba(59, 130, 246, 0.25);
-        border-radius: 10px;
+        background: rgba(66, 165, 245, 0.08);
+        border: 1px solid rgba(66, 165, 245, 0.25);
+        border-radius: 4px;
         padding: 10px 12px;
         animation: td-pulse 2s ease-in-out infinite;
       }
@@ -1991,23 +1994,23 @@
       }
       #td-panel .td-open-position-label {
         font-size: 10px;
-        font-weight: 700;
+        font-weight: 600;
         text-transform: uppercase;
-        letter-spacing: 0.1em;
-        color: rgba(59, 130, 246, 0.8);
+        letter-spacing: 0.08em;
+        color: rgba(66, 165, 245, 0.8);
       }
-      #td-panel .td-side-long { color: #3ad084; font-weight: 700; font-size: 13px; }
-      #td-panel .td-side-short { color: #ff6b63; font-weight: 700; font-size: 13px; }
+      #td-panel .td-side-long { color: #26a69a; font-weight: 700; font-size: 13px; }
+      #td-panel .td-side-short { color: #ef5350; font-weight: 700; font-size: 13px; }
       #td-panel .td-open-position-detail {
         display: flex;
         align-items: baseline;
         gap: 6px;
         font-size: 13px;
-        color: #c8cad5;
+        color: #d1d4dc;
       }
       #td-panel .td-open-position-detail .td-trade-symbol {
         font-weight: 700;
-        color: #e0e2ea;
+        color: #d1d4dc;
       }
       #td-panel .td-open-position-pnl {
         font-size: 13px;
@@ -2022,18 +2025,18 @@
       }
       #td-panel .td-stat {
         padding: 10px 11px;
-        border-radius: 10px;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 4px;
+        background: #1e222d;
+        border: 1px solid #2a2e39;
         color: inherit;
         text-align: left;
         font-family: inherit;
       }
       #td-panel .td-stat-label {
-        font-size: 11px;
+        font-size: 10px;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: #8e93ad;
+        letter-spacing: 0.06em;
+        color: #787b86;
         margin-bottom: 2px;
       }
       #td-panel .td-stat-value {
@@ -2043,11 +2046,11 @@
       }
       #td-panel .td-stat-link {
         cursor: pointer;
-        transition: border-color 0.18s, background 0.18s;
+        transition: border-color 0.15s, background 0.15s;
       }
       #td-panel .td-stat-link:hover:not(:disabled) {
-        border-color: rgba(255, 255, 255, 0.1);
-        background: rgba(255, 255, 255, 0.07);
+        border-color: #3d4560;
+        background: #252a38;
       }
       #td-panel .td-stat-link:disabled {
         cursor: default;
@@ -2069,11 +2072,11 @@
       .td-anno-note {
         width: 100%;
         box-sizing: border-box;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 10px;
+        background: #131722;
+        border: 1px solid #2a2e39;
+        border-radius: 4px;
         padding: 9px 10px;
-        color: #edf1ff;
+        color: #d1d4dc;
         font-size: 13px;
         font-family: inherit;
       }
@@ -2081,30 +2084,29 @@
       .td-anno-select:focus,
       .td-anno-note:focus {
         outline: none;
-        border-color: rgba(88, 166, 255, 0.28);
-      }
-      #td-panel .td-prearm-btn,
-      .td-anno-save-btn {
-        border-radius: 10px;
+        border-color: #2962ff;
       }
       #td-panel .td-prearm-btn {
         border: none;
+        border-radius: 4px;
         padding: 10px 14px;
         font-size: 12px;
-        font-weight: 700;
+        font-weight: 600;
         color: #fff;
-        background: linear-gradient(135deg, #58a6ff, #2b7de9);
+        background: #2962ff;
         cursor: pointer;
         font-family: inherit;
+        transition: background 0.15s;
       }
+      #td-panel .td-prearm-btn:hover { background: #1e50d8; }
       #td-panel .td-prearm-btn:disabled {
         opacity: 0.4;
         cursor: not-allowed;
       }
       #td-panel .td-prearm-btn-secondary {
-        background: rgba(255, 255, 255, 0.08);
-        color: #edf1ff;
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: #252a38;
+        color: #d1d4dc;
+        border: 1px solid #2a2e39;
       }
       #td-panel .td-prearm-chip-row {
         display: flex;
@@ -2117,25 +2119,29 @@
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 4px 9px;
-        border-radius: 999px;
-        background: rgba(58, 208, 132, 0.12);
-        color: #3ad084;
-        font-weight: 700;
+        padding: 1px 6px;
+        border-radius: 3px;
+        background: rgba(38, 166, 154, 0.2);
+        color: #26a69a;
+        border: 1px solid rgba(38, 166, 154, 0.4);
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
       }
       #td-panel .td-prearm-helper {
         font-size: 12px;
-        color: #8e93ad;
-        line-height: 1.6;
+        color: #787b86;
+        line-height: 1.5;
       }
       #td-panel .td-prearm-status {
         font-size: 12px;
-        color: #8e93ad;
+        color: #787b86;
         line-height: 1.5;
         min-height: 18px;
       }
       #td-panel .td-prearm-status-error {
-        color: #ffb84d;
+        color: #ffb300;
       }
       #td-panel .td-prearm-list {
         display: flex;
@@ -2151,9 +2157,9 @@
         align-items: flex-start;
         gap: 10px;
         padding: 9px 10px;
-        border-radius: 10px;
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 4px;
+        background: #1e222d;
+        border: 1px solid #2a2e39;
         cursor: pointer;
       }
       #td-panel .td-prearm-item input {
@@ -2171,14 +2177,14 @@
       #td-panel .td-prearm-zone-icon {
         font-size: 14px;
       }
-      #td-panel .td-prearm-zone-icon.td-zone-golden { color: #f1c40f; }
-      #td-panel .td-prearm-zone-icon.td-zone-overtime { color: #f39c12; }
+      #td-panel .td-prearm-zone-icon.td-zone-golden { color: #ffb300; }
+      #td-panel .td-prearm-zone-icon.td-zone-overtime { color: #ffb300; }
       /* Back button in pre-arm header */
       #td-panel .td-prearm-back {
-        background: none; border: none; color: #8e93ad;
+        background: none; border: none; color: #787b86;
         cursor: pointer; font-size: 16px; line-height: 1; padding: 0;
       }
-      #td-panel .td-prearm-back:hover { color: #edf1ff; }
+      #td-panel .td-prearm-back:hover { color: #d1d4dc; }
       /* Pre-arm view always shows content (ignore collapsed class) */
       #td-panel.td-collapsed .td-content.td-prearm-content { display: flex !important; }
       .td-anno-summary {
@@ -2194,22 +2200,22 @@
         gap: 6px;
       }
       .td-anno-summary-card {
-        border-radius: 10px;
+        border-radius: 4px;
         padding: 10px;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.06);
+        background: #131722;
+        border: 1px solid #2a2e39;
       }
       .td-anno-summary-label {
-        font-size: 11px;
-        color: #8e93ad;
+        font-size: 10px;
+        color: #787b86;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.06em;
         margin-bottom: 3px;
       }
       .td-anno-summary-value {
         font-size: 13px;
-        font-weight: 700;
-        color: #edf1ff;
+        font-weight: 600;
+        color: #d1d4dc;
       }
       .td-anno-note {
         min-height: 40px;
@@ -2227,15 +2233,15 @@
         backdrop-filter: blur(4px);
       }
       #td-risk-modal {
-        background: #1a1a2e;
-        border: 1px solid rgba(231, 76, 60, 0.3);
-        border-radius: 12px;
+        background: #1e222d;
+        border: 1px solid rgba(239, 83, 80, 0.3);
+        border-radius: 8px;
         padding: 24px 28px;
         max-width: 420px;
         width: 90%;
-        box-shadow: 0 8px 40px rgba(231, 76, 60, 0.2);
-        color: #e4e4ed;
-        font-family: 'Inter', -apple-system, sans-serif;
+        box-shadow: 0 8px 40px rgba(239, 83, 80, 0.2);
+        color: #d1d4dc;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
       }
       #td-risk-modal .td-modal-icon {
         font-size: 32px;
@@ -2245,24 +2251,24 @@
       #td-risk-modal .td-modal-title {
         font-size: 16px;
         font-weight: 700;
-        color: #e74c3c;
+        color: #ef5350;
         text-align: center;
         margin-bottom: 12px;
       }
       #td-risk-modal .td-modal-body {
         font-size: 13px;
         line-height: 1.7;
-        color: #b0b0c0;
+        color: #787b86;
         margin-bottom: 20px;
       }
       #td-risk-modal .td-modal-extra {
-        background: rgba(243, 156, 18, 0.1);
-        border-left: 3px solid #f39c12;
+        background: rgba(255, 179, 0, 0.1);
+        border-left: 3px solid #ffb300;
         padding: 8px 12px;
         margin-bottom: 16px;
         font-size: 12px;
-        color: #f39c12;
-        border-radius: 0 6px 6px 0;
+        color: #ffb300;
+        border-radius: 0 4px 4px 0;
       }
       #td-risk-modal .td-modal-btns {
         display: flex;
@@ -2271,20 +2277,21 @@
       }
       #td-risk-modal .td-btn {
         padding: 8px 20px;
-        border-radius: 6px;
+        border-radius: 4px;
         font-size: 13px;
         font-weight: 600;
         cursor: pointer;
         border: none;
-        transition: opacity 0.2s;
+        transition: opacity 0.15s;
       }
       #td-risk-modal .td-btn:hover { opacity: 0.85; }
       #td-risk-modal .td-btn-cancel {
-        background: rgba(255, 255, 255, 0.1);
-        color: #c8c8d0;
+        background: #252a38;
+        border: 1px solid #2a2e39;
+        color: #d1d4dc;
       }
       #td-risk-modal .td-btn-confirm {
-        background: #e74c3c;
+        background: #ef5350;
         color: #fff;
       }
       #td-risk-modal .td-btn-confirm:disabled {
@@ -2566,7 +2573,7 @@
         <div class="td-open-position-detail">
           <span class="td-trade-symbol">${escapeHtml(pos.symbol)}</span>
           <span>${escapeHtml(String(pos.qty))} @ ${escapeHtml(priceFormatted)}</span>
-          <span style="margin-left:auto;color:#8e93ad;font-size:12px">${timeFormatted}</span>
+          <span style="margin-left:auto;color:#787b86;font-size:12px">${timeFormatted}</span>
         </div>
         ${pnlLine}
       </div>
@@ -3717,7 +3724,7 @@
     }
 
     const pnl = getNumericPnl(trade.realized_pnl_net);
-    const pnlColor = pnl === null ? '#8e93ad' : pnl >= 0 ? '#2ecc71' : '#e74c3c';
+    const pnlColor = pnl === null ? '#787b86' : pnl >= 0 ? '#26a69a' : '#ef5350';
     const pnlDisplay = formatMoney(pnl, 2);
     const checkMark = isAnnotationIncomplete(trade) ? '' : '<span class="td-anno-nav-check">✓</span>';
     const nextIncompleteIdx = findNextIncompleteTradeIndex(annoTrades, annoIdx);
