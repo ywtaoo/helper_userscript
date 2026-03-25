@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.3.8
+// @version      0.3.9
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -2340,7 +2340,7 @@
     if (!status) {
       return `
         <div class="td-header">
-          <span class="td-title">📊 Discipline</span>
+          <span class="td-title">DontBlow</span>
           <span class="td-risk-dot td-risk-green"></span>
         </div>
         <div class="td-degraded">Loading...</div>
@@ -2356,7 +2356,7 @@
 
     return `
       <div class="td-header">
-        <span class="td-title">📊 Discipline</span>
+        <span class="td-title">DontBlow</span>
         <div class="td-header-actions">
           ${reviewBadgeHTML}
           <span class="td-risk-dot ${riskClass}" title="Risk: ${status.risk.state}"></span>
@@ -3024,7 +3024,7 @@
     // No successful status yet: replace initial loading state with explicit error.
     panelEl.innerHTML = `
       <div class="td-header">
-        <span class="td-title">📊 Discipline</span>
+        <span class="td-title">DontBlow</span>
         <span class="td-risk-dot td-risk-green"></span>
       </div>
       <div class="td-degraded">⚠ Data unavailable${reasonText}</div>
