@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.3.9
+// @version      0.4.1
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -345,6 +345,7 @@
   let pollInProgress = false;
   let pollPending = false;
   let lastPollRunAt = 0;
+  let lastFullScanAt = 0; // timestamp of last full (all-rows) scrape for partial-fill detection
 
   let retryIntervalId = null;
   let statusIntervalId = null;
@@ -353,6 +354,8 @@
   let isSendingEvent = false;
   let isRefreshingStatus = false;
   let pendingStatusRefresh = false;
+  let statusRefreshFailureCount = 0;
+  let statusRefreshNextAllowedAt = 0;
   let lifecycleCleanupRegistered = false;
   let cleanedUp = false;
 
@@ -666,10 +669,17 @@
     const rows = table.querySelectorAll('tbody tr.ka-row');
     if (!rows.length) return;
 
+    // Full scan every SCRAPE_INTERVAL_MS to catch partial-fill updates (same orderId, new qty).
+    // Between full scans, skip already-sent rows to reduce MutationObserver-triggered DOM churn.
+    const doFullScan = Date.now() - lastFullScanAt >= SCRAPE_INTERVAL_MS;
+    if (doFullScan) lastFullScanAt = Date.now();
+
     const newRows = [];
     for (const row of rows) {
       const orderId = row.dataset.rowId;
       if (!orderId) continue;
+
+      if (!doFullScan && sentOrderSnapshots.has(orderId) && !pendingOrderSnapshots.has(orderId)) continue;
 
       const fillData = scrapeOrderRow(row, orderId);
       if (fillData) {
@@ -889,14 +899,14 @@
 
       // Check if position actually changed
       const prev = currentOpenPosition;
-      const changed = !prev
+      const structuralChanged = !prev
         || prev.symbol !== symbol
         || prev.side !== side
         || prev.qty !== qty
-        || prev.entryPrice !== entryPrice
-        || prev.unrealizedPnl !== unrealizedPnl;
+        || prev.entryPrice !== entryPrice;
+      const pnlChanged = !prev || prev.unrealizedPnl !== unrealizedPnl;
 
-      if (changed) {
+      if (structuralChanged || pnlChanged) {
         currentOpenPosition = {
           symbol,
           side,
@@ -905,7 +915,12 @@
           unrealizedPnl,
           firstSeenAt: (prev && prev.symbol === symbol && prev.side === side) ? prev.firstSeenAt : new Date().toISOString(),
         };
-        renderPanel(lastStatus, lastTrades);
+        if (structuralChanged) {
+          renderPanel(lastStatus, lastTrades);
+        } else {
+          // Only P&L changed — update in place to avoid full panel rebuild
+          updatePnlInPlace(unrealizedPnl);
+        }
       }
     } catch (e) {
       console.error('[TD] Error scraping position row:', e);
@@ -2804,6 +2819,29 @@
     }, 2500);
   }
 
+  function updatePnlInPlace(unrealizedPnl) {
+    if (!panelEl) return;
+    const container = panelEl.querySelector('.td-open-position');
+    if (!container) return;
+    const existing = container.querySelector('.td-open-position-pnl');
+    if (unrealizedPnl === null) {
+      if (existing) { existing.remove(); repositionToasts(); }
+      return;
+    }
+    const cls = `td-open-position-pnl ${unrealizedPnl >= 0 ? 'td-positive' : 'td-negative'}`;
+    const text = formatMoney(unrealizedPnl, 2);
+    if (existing) {
+      existing.className = cls;
+      existing.textContent = text;
+    } else {
+      const el = document.createElement('div');
+      el.className = cls;
+      el.textContent = text;
+      container.appendChild(el);
+      repositionToasts();
+    }
+  }
+
   function renderPanel(status, trades) {
     if (!panelEl) return;
     panelEl.innerHTML = buildPanelHTML(status, trades);
@@ -2930,6 +2968,7 @@
 
   async function refreshStatus() {
     if (cleanedUp) return;
+    if (statusRefreshFailureCount >= 3 && Date.now() < statusRefreshNextAllowedAt) return;
     if (isRefreshingStatus) {
       pendingStatusRefresh = true;
       return;
@@ -2992,9 +3031,15 @@
       }
 
       checkTradeLimitWarning(status);
+      statusRefreshFailureCount = 0;
     } catch (error) {
       console.error('[TD] Failed to refresh panel data:', error);
       showDegraded(getRequestErrorMessage(error, 'Backend unreachable'));
+      statusRefreshFailureCount++;
+      if (statusRefreshFailureCount >= 3) {
+        const backoffMs = Math.min(120000, 30000 * (statusRefreshFailureCount - 1));
+        statusRefreshNextAllowedAt = Date.now() + backoffMs;
+      }
     } finally {
       isRefreshingStatus = false;
       if (pendingStatusRefresh && !cleanedUp) {
