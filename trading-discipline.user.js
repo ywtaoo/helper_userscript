@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.4.1
+// @version      0.4.3
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -1123,11 +1123,11 @@
         position: fixed;
         width: 320px;
         padding: 14px 16px 16px;
-        background: rgba(19, 23, 34, 0.95);
+        background: rgba(19, 23, 34, 0.97);
         color: #d1d4dc;
         border: 1px solid #2a2e39;
         border-radius: 14px;
-        backdrop-filter: blur(12px);
+        backdrop-filter: blur(4px);
         z-index: 99999;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
         font-size: 13px;
@@ -1135,6 +1135,8 @@
         box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
         user-select: none;
         box-sizing: border-box;
+        will-change: transform;
+        contain: layout style;
       }
       #td-panel.td-collapsed .td-content {
         display: none;
@@ -1285,11 +1287,11 @@
         border-radius: 3px;
         text-transform: uppercase;
         letter-spacing: 0.03em;
-        animation: td-pulse 2s ease-in-out infinite;
+        opacity: 0.85;
       }
       @keyframes td-pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.6; }
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(0.97); }
       }
 
       /* Fill capture flash */
@@ -1333,7 +1335,7 @@
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
         font-size: 12px;
         color: #d1d4dc;
-        backdrop-filter: blur(12px);
+        backdrop-filter: blur(4px);
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
         animation: td-toast-in 0.25s ease-out;
         white-space: nowrap;
@@ -2000,6 +2002,8 @@
         border-radius: 4px;
         padding: 10px 12px;
         animation: td-pulse 2s ease-in-out infinite;
+        will-change: transform;
+        contain: layout style;
       }
       #td-panel .td-open-position-header {
         display: flex;
@@ -2342,9 +2346,16 @@
     console.log('[TD] 📊 Discipline panel initialized');
   }
 
+  let rerenderScheduled = false;
   function rerenderPanel() {
     if (!lastStatus) return;
-    renderPanel(lastStatus, lastTrades);
+    if (rerenderScheduled) return;
+    rerenderScheduled = true;
+    queueMicrotask(() => {
+      rerenderScheduled = false;
+      if (!lastStatus) return;
+      renderPanel(lastStatus, lastTrades);
+    });
   }
 
   function buildPanelHTML(status, trades = lastTrades) {
@@ -2708,13 +2719,19 @@
     e.preventDefault();
   }
 
+  let repositionRafId = 0;
   function onPanelMouseMove(e) {
     if (!panelEl || !panelDragState.isDragging) return;
     const dx = e.clientX - panelDragState.startX;
     const dy = e.clientY - panelDragState.startY;
     panelEl.style.left = `${panelDragState.initialLeft + dx}px`;
     panelEl.style.top = `${panelDragState.initialTop + dy}px`;
-    repositionToasts();
+    if (!repositionRafId) {
+      repositionRafId = requestAnimationFrame(() => {
+        repositionRafId = 0;
+        repositionToasts();
+      });
+    }
   }
 
   function onPanelMouseUp() {
