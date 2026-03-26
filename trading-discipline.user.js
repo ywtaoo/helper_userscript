@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.4.5
+// @version      0.4.6
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -18,8 +18,8 @@
   // ============================================================
   // Configuration
   // ============================================================
-  const API_BASE = 'http://localhost:18080/api';
-  const REVIEW_PAGE_URL = 'http://localhost:18080/review/';
+  const API_BASE = 'https://localhost:18080/api';
+  const REVIEW_PAGE_URL = 'https://localhost:18080/review/';
   const REFRESH_INTERVAL = 30000; // 30s panel refresh
   const RETRY_QUEUE_KEY = 'td_retry_queue';
   const PRE_ARM_DRAFT_KEY = 'td_pre_arm_draft';
