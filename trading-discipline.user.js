@@ -1,17 +1,15 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.4.4
+// @version      0.4.5
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
 // @author       hoho
 // @match        https://www.tradingview.com/chart/*
 // @match        https://www.tradingview.com/chart*
-// @grant        GM_xmlhttpRequest
-// @grant        GM_addStyle
+// @grant        none
 // @run-at       document-start
-// @connect      localhost
 // ==/UserScript==
 
 (function () {
@@ -61,38 +59,37 @@
     return error;
   }
 
-  function requestJson(method, path, options = {}) {
+  async function requestJson(method, path, options = {}) {
     const { data, headers = {}, timeout = DEFAULT_REQUEST_TIMEOUT_MS } = options;
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
+    const controller = new AbortController();
+    const timerId = setTimeout(() => controller.abort(), timeout);
+    try {
+      const res = await fetch(`${API_BASE}${path}`, {
         method,
-        url: `${API_BASE}${path}`,
-        timeout,
+        signal: controller.signal,
         headers: data === undefined
           ? headers
           : { 'Content-Type': 'application/json', ...headers },
-        data: data === undefined ? undefined : JSON.stringify(data),
-        onload: (res) => {
-          if (res.status < 200 || res.status >= 300) {
-            reject(createRequestError(`HTTP ${res.status}`, res.status, res.responseText));
-            return;
-          }
-
-          if (!res.responseText) {
-            resolve(null);
-            return;
-          }
-
-          try {
-            resolve(JSON.parse(res.responseText));
-          } catch (error) {
-            reject(createRequestError('Invalid JSON response', res.status, res.responseText));
-          }
-        },
-        onerror: (error) => reject(error),
-        ontimeout: () => reject(createRequestError('timeout')),
+        body: data === undefined ? undefined : JSON.stringify(data),
       });
-    });
+      if (!res.ok) {
+        const text = await res.text();
+        throw createRequestError(`HTTP ${res.status}`, res.status, text);
+      }
+      const text = await res.text();
+      const trimmed = text.trim();
+      if (!trimmed) return null;
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        throw createRequestError('Invalid JSON response', res.status, text);
+      }
+    } catch (error) {
+      if (error.name === 'AbortError') throw createRequestError('timeout');
+      throw error;
+    } finally {
+      clearTimeout(timerId);
+    }
   }
 
   function formatMoney(value, digits = 2) {
@@ -487,19 +484,23 @@
     await flushPreArmDraft();
   }
 
-  function sendEventPayload(payload) {
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
+  async function sendEventPayload(payload) {
+    const controller = new AbortController();
+    const timerId = setTimeout(() => controller.abort(), EVENT_REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${API_BASE}/events`, {
         method: 'POST',
-        url: `${API_BASE}/events`,
-        data: JSON.stringify(payload),
-        timeout: EVENT_REQUEST_TIMEOUT_MS,
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
-        onload: resolve,
-        onerror: reject,
-        ontimeout: () => reject(new Error('timeout')),
+        body: JSON.stringify(payload),
       });
-    });
+      return res;
+    } catch (error) {
+      if (error.name === 'AbortError') throw new Error('timeout');
+      throw error;
+    } finally {
+      clearTimeout(timerId);
+    }
   }
 
   function enqueueEventSend(item) {
@@ -1118,7 +1119,8 @@
     if (cleanedUp || panelEl) return;
 
     // Inject styles
-    GM_addStyle(`
+    const tdStyle = document.createElement('style');
+    tdStyle.textContent = `
       #td-panel {
         position: fixed;
         width: 320px;
@@ -2306,7 +2308,8 @@
         opacity: 0.35;
         cursor: not-allowed;
       }
-    `);
+    `;
+    document.head.appendChild(tdStyle);
 
     // Create panel element
     panelEl = document.createElement('div');
@@ -3150,13 +3153,12 @@
       riskAcknowledged = true;
       closeOverlay();
 
-      // Notify backend
-      GM_xmlhttpRequest({
+      // Notify backend (fire-and-forget)
+      fetch(`${API_BASE}/risk/acknowledge`, {
         method: 'POST',
-        url: `${API_BASE}/risk/acknowledge`,
         headers: { 'Content-Type': 'application/json' },
-        data: JSON.stringify({ timestamp: new Date().toISOString() }),
-      });
+        body: JSON.stringify({ timestamp: new Date().toISOString() }),
+      }).catch(() => {});
 
       // Reset acknowledged flag after cooldown (allow re-trigger for new events)
       setTimeout(() => {
