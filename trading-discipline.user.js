@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.4.6
+// @version      0.4.7
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -1597,7 +1597,7 @@
       /* Field rows */
       .td-anno-field {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
         padding: 6px 0;
         gap: 10px;
@@ -1607,6 +1607,21 @@
         color: #787b86;
         white-space: nowrap;
         min-width: 70px;
+        padding-top: 8px;
+      }
+      .td-anno-field-label-missing {
+        color: #ef5350;
+      }
+      .td-anno-required {
+        color: #ef5350;
+        margin-left: 2px;
+      }
+      .td-anno-field-body {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        max-width: 240px;
       }
       .td-anno-select {
         flex: 1;
@@ -1619,11 +1634,20 @@
         font-family: inherit;
         cursor: pointer;
         appearance: auto;
-        max-width: 240px;
+        max-width: none;
       }
       .td-anno-select:focus {
         outline: none;
         border-color: #2962ff;
+      }
+      .td-anno-input-missing {
+        border-color: rgba(239, 83, 80, 0.55) !important;
+        box-shadow: 0 0 0 1px rgba(239, 83, 80, 0.18);
+      }
+      .td-anno-field-hint {
+        font-size: 11px;
+        color: #ef5350;
+        line-height: 1.35;
       }
 
       /* Multi-select trigger dropdown */
@@ -1743,6 +1767,9 @@
         color: #787b86;
         transition: background 0.15s, border-color 0.15s, color 0.15s;
       }
+      .td-anno-btn-group-missing button {
+        border-color: rgba(239, 83, 80, 0.55);
+      }
       .td-anno-btn-group button:hover {
         background: #2e3348;
         color: #d1d4dc;
@@ -1807,6 +1834,12 @@
       .td-anno-save-btn:disabled {
         opacity: 0.35;
         cursor: not-allowed;
+      }
+      .td-anno-save-hint {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #ef5350;
+        line-height: 1.4;
       }
 
       /* Panel layout overrides */
@@ -3727,6 +3760,29 @@
     };
   }
 
+  function getAnnotationMissingFields(trade, form) {
+    const missingFields = [];
+
+    if (!form.playbook || form.playbook === 'Untagged') {
+      missingFields.push('Playbook');
+    }
+    if (!form.plan_adherence) {
+      missingFields.push('Plan Adherence');
+    }
+    if (!form.mindset) {
+      missingFields.push('Mindset');
+    }
+    if (isLosingTrade(trade) && (!form.error_type || form.error_type === 'Untagged')) {
+      missingFields.push('Error Type');
+    }
+
+    return missingFields;
+  }
+
+  function isAnnotationFormComplete(trade, form) {
+    return getAnnotationMissingFields(trade, form).length === 0;
+  }
+
   function findNextIncompleteTradeIndex(trades, currentIndex, options = {}) {
     const { includeCurrent = false } = options;
     if (
@@ -3787,6 +3843,19 @@
       ? `${Math.round(trade.annotations.setup_completeness * 100)}%`
       : '—';
     const showErrorType = isLosingTrade(trade);
+    const missingFields = getAnnotationMissingFields(trade, annoForm);
+    const missingFieldSet = new Set(missingFields);
+    const saveHint = missingFields.length > 0
+      ? `Complete required field${missingFields.length > 1 ? 's' : ''}: ${missingFields.join(', ')}.`
+      : '';
+    const playbookLabelClass = missingFieldSet.has('Playbook') ? ' td-anno-field-label-missing' : '';
+    const planLabelClass = missingFieldSet.has('Plan Adherence') ? ' td-anno-field-label-missing' : '';
+    const mindsetLabelClass = missingFieldSet.has('Mindset') ? ' td-anno-field-label-missing' : '';
+    const errorLabelClass = missingFieldSet.has('Error Type') ? ' td-anno-field-label-missing' : '';
+    const playbookInputClass = missingFieldSet.has('Playbook') ? ' td-anno-input-missing' : '';
+    const mindsetInputClass = missingFieldSet.has('Mindset') ? ' td-anno-input-missing' : '';
+    const errorInputClass = missingFieldSet.has('Error Type') ? ' td-anno-input-missing' : '';
+    const planGroupClass = missingFieldSet.has('Plan Adherence') ? ' td-anno-btn-group-missing' : '';
     const playbookIds = buildPlaybookOptions(true);
     if (annoForm.playbook && !playbookIds.includes(annoForm.playbook)) {
       playbookIds.push(annoForm.playbook);
@@ -3840,26 +3909,39 @@
           </div>
         </div>
         <div class="td-anno-field">
-          <span class="td-anno-field-label">Playbook</span>
-          <select class="td-anno-select" id="td-anno-playbook">${playbookOpts}</select>
+          <span class="td-anno-field-label${playbookLabelClass}">Playbook<span class="td-anno-required">*</span></span>
+          <div class="td-anno-field-body">
+            <select class="td-anno-select${playbookInputClass}" id="td-anno-playbook">${playbookOpts}</select>
+            ${missingFieldSet.has('Playbook') ? '<div class="td-anno-field-hint">Choose a playbook before moving on.</div>' : ''}
+          </div>
         </div>
         <div class="td-anno-field">
-          <span class="td-anno-field-label">Plan Adherence</span>
-          <div class="td-anno-btn-group" id="td-anno-plan-group">${planButtons}</div>
+          <span class="td-anno-field-label${planLabelClass}">Plan Adherence<span class="td-anno-required">*</span></span>
+          <div class="td-anno-field-body">
+            <div class="td-anno-btn-group${planGroupClass}" id="td-anno-plan-group">${planButtons}</div>
+            ${missingFieldSet.has('Plan Adherence') ? '<div class="td-anno-field-hint">Select Yes, Partial, or No before continuing.</div>' : ''}
+          </div>
         </div>
         <div class="td-anno-field">
-          <span class="td-anno-field-label">Mindset</span>
-          <select class="td-anno-select" id="td-anno-mindset">${mindsetOpts}</select>
+          <span class="td-anno-field-label${mindsetLabelClass}">Mindset<span class="td-anno-required">*</span></span>
+          <div class="td-anno-field-body">
+            <select class="td-anno-select${mindsetInputClass}" id="td-anno-mindset">${mindsetOpts}</select>
+            ${missingFieldSet.has('Mindset') ? '<div class="td-anno-field-hint">Pick the mindset that best matches the trade.</div>' : ''}
+          </div>
         </div>
         ${showErrorType ? `<div class="td-anno-field">
-          <span class="td-anno-field-label">Error Type</span>
-          <select class="td-anno-select" id="td-anno-error">${errorOpts}</select>
+          <span class="td-anno-field-label${errorLabelClass}">Error Type<span class="td-anno-required">*</span></span>
+          <div class="td-anno-field-body">
+            <select class="td-anno-select${errorInputClass}" id="td-anno-error">${errorOpts}</select>
+            ${missingFieldSet.has('Error Type') ? '<div class="td-anno-field-hint">Choose the main mistake before moving on.</div>' : ''}
+          </div>
         </div>` : ''}
         <div class="td-anno-field">
           <span class="td-anno-field-label">Note</span>
           <input class="td-anno-note" id="td-anno-note" type="text" maxlength="160" value="${escapeHtml(annoForm.note || '')}" placeholder="Optional one-liner...">
         </div>
-        <button class="td-anno-save-btn" id="td-anno-save">${saveBtnText}</button>
+        ${saveHint ? `<div class="td-anno-save-hint">${escapeHtml(saveHint)}</div>` : ''}
+        <button class="td-anno-save-btn" id="td-anno-save" ${missingFields.length > 0 ? 'disabled' : ''}>${saveBtnText}</button>
       </div>
     `;
 
@@ -3890,6 +3972,7 @@
 
     overlay.querySelector('#td-anno-playbook').addEventListener('change', (e) => {
       annoForm.playbook = e.target.value;
+      renderAnnoModal();
     });
 
     overlay.querySelectorAll('[data-plan]').forEach((button) => {
@@ -3902,12 +3985,14 @@
 
     overlay.querySelector('#td-anno-mindset').addEventListener('change', (e) => {
       annoForm.mindset = e.target.value || null;
+      renderAnnoModal();
     });
 
     const errorSelect = overlay.querySelector('#td-anno-error');
     if (errorSelect) {
       errorSelect.addEventListener('change', (e) => {
         annoForm.error_type = e.target.value;
+        renderAnnoModal();
       });
     }
 
@@ -3923,6 +4008,10 @@
   async function saveAnnotation(overlay) {
     const trade = annoTrades[annoIdx];
     if (!trade) return;
+    if (!isAnnotationFormComplete(trade, annoForm)) {
+      renderAnnoModal();
+      return;
+    }
 
     const saveBtn = overlay.querySelector('#td-anno-save');
     saveBtn.disabled = true;
@@ -3968,7 +4057,9 @@
       ensurePreArmReadyForCreate,
       formatPendingReviewLabel,
       findNextIncompleteTradeIndex,
+      getAnnotationMissingFields,
       getFirstPendingReviewDate,
+      isAnnotationFormComplete,
       isValidStatusPayload,
       shouldRefreshPendingReviewTarget,
     };
