@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.4.3
+// @version      0.4.4
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -1123,11 +1123,10 @@
         position: fixed;
         width: 320px;
         padding: 14px 16px 16px;
-        background: rgba(19, 23, 34, 0.97);
+        background: #131722;
         color: #d1d4dc;
         border: 1px solid #2a2e39;
         border-radius: 14px;
-        backdrop-filter: blur(4px);
         z-index: 99999;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
         font-size: 13px;
@@ -1135,7 +1134,6 @@
         box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
         user-select: none;
         box-sizing: border-box;
-        will-change: transform;
         contain: layout style;
       }
       #td-panel.td-collapsed .td-content {
@@ -1289,11 +1287,6 @@
         letter-spacing: 0.03em;
         opacity: 0.85;
       }
-      @keyframes td-pulse {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(0.97); }
-      }
-
       /* Fill capture flash */
       @keyframes td-fill-flash {
         0%   { border-color: rgba(38, 166, 154, 0.8); box-shadow: 0 0 18px rgba(38, 166, 154, 0.5), 0 16px 48px rgba(0, 0, 0, 0.45); }
@@ -1328,14 +1321,13 @@
         to   { opacity: 0; transform: translateY(-8px); }
       }
       .td-fill-toast {
-        background: rgba(19, 23, 34, 0.95);
+        background: #1a1e2d;
         border: 1px solid rgba(38, 166, 154, 0.3);
         border-radius: 4px;
         padding: 6px 12px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
         font-size: 12px;
         color: #d1d4dc;
-        backdrop-filter: blur(4px);
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
         animation: td-toast-in 0.25s ease-out;
         white-space: nowrap;
@@ -2001,9 +1993,6 @@
         border: 1px solid rgba(66, 165, 245, 0.25);
         border-radius: 4px;
         padding: 10px 12px;
-        animation: td-pulse 2s ease-in-out infinite;
-        will-change: transform;
-        contain: layout style;
       }
       #td-panel .td-open-position-header {
         display: flex;
