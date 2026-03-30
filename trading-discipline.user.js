@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.4.7
+// @version      0.4.9
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -1195,6 +1195,15 @@
         font-size: 10px;
       }
       .td-collapse-btn:hover {
+        opacity: 1;
+      }
+      .td-econ-icon {
+        font-size: 13px;
+        cursor: default;
+        line-height: 1;
+        opacity: 0.55;
+      }
+      .td-econ-icon.td-econ-high {
         opacity: 1;
       }
       #td-panel .td-title {
@@ -2405,11 +2414,22 @@
     const setupAverage = calculateSetupAverage(trades);
     const reviewBadgeHTML = buildPendingReviewBadgeHTML(status);
 
+    // Economic events icon
+    const econEvents = (status.economic_events_today || []);
+    const hasHighImpact = econEvents.some((e) => e.impact === 'High');
+    const econTooltip = escapeHtml(
+      econEvents.map((e) => `${e.event_time || '--:--'} ET  ${e.event_name}`).join('\n')
+    );
+    const econIconHTML = econEvents.length > 0
+      ? `<span class="td-econ-icon${hasHighImpact ? ' td-econ-high' : ''}" title="${econTooltip}">📅</span>`
+      : '';
+
     return `
       <div class="td-header">
         <span class="td-title">DontBlow</span>
         <div class="td-header-actions">
           ${reviewBadgeHTML}
+          ${econIconHTML}
           <span class="td-risk-dot ${riskClass}" title="Risk: ${status.risk.state}"></span>
           <span class="td-collapse-btn" title="Toggle Panel">${isCollapsed ? '➕' : '➖'}</span>
         </div>
