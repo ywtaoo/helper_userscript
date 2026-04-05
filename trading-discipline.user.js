@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trading Discipline Panel
 // @namespace    trading-discipline
-// @version      0.4.9
+// @version      0.5.0
 // @updateURL    https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @downloadURL  https://ywtaoo.github.io/helper_userscript/trading-discipline.user.js
 // @description  ES/NQ/GC intraday trading discipline system — DOM scraping + status panel + risk alerts
@@ -32,7 +32,14 @@
   const PENDING_REVIEW_TARGET_REFRESH_TTL_MS = 5 * 60 * 1000;
   const PLAN_ADHERENCE_OPTIONS = ['Yes', 'Partial', 'No'];
   const MINDSET_OPTIONS = ['Calm', 'FOMO', 'Revenge', 'Fatigued'];
-  const ERROR_TYPES = ['Untagged', 'Chase', 'Early Entry', 'Late Entry', 'Oversize', 'Move Stop', 'Add to Loser', 'Overtrade', 'Rule Violation', 'Bad Exit', 'Other'];
+  const ERROR_TAXONOMY = {
+    'Untagged': [],
+    'Bad Setup': ['Weak Structure', 'Counter-Trend', 'No Confirmation', 'Wrong Context'],
+    'Bad Management': ['Bad Entry', 'SL Placement', 'Missed Partial', 'Premature Exit', 'Moved Stop', 'Bad Sizing', 'Add to Loser'],
+    'Clean Loss': [],
+    'Discipline': ['FOMO', 'Revenge', 'Overtrade', 'Impulse'],
+  };
+  const ERROR_CATEGORIES = Object.keys(ERROR_TAXONOMY);
   const IS_TEST_MODE = typeof globalThis !== 'undefined' && globalThis.__TD_TEST_MODE__ === true;
   const IS_MAC_PLATFORM = /Mac|iPhone|iPad|iPod/i.test(
     (navigator.userAgentData && navigator.userAgentData.platform) ||
@@ -148,7 +155,7 @@
     if (annotations.mindset === null || annotations.mindset === undefined) {
       return true;
     }
-    return isLosingTrade(trade) && annotations.error_type === 'Untagged';
+    return isLosingTrade(trade) && (!annotations.error_category || annotations.error_category === 'Untagged');
   }
 
   function getSetupProgress(trade) {
@@ -3775,7 +3782,8 @@
       playbook: annotations.playbook || 'Untagged',
       plan_adherence: annotations.plan_adherence || null,
       mindset: annotations.mindset || null,
-      error_type: annotations.error_type || 'Untagged',
+      error_category: annotations.error_category || 'Untagged',
+      error_subtype: annotations.error_subtype || null,
       note: annotations.note || '',
     };
   }
@@ -3792,7 +3800,7 @@
     if (!form.mindset) {
       missingFields.push('Mindset');
     }
-    if (isLosingTrade(trade) && (!form.error_type || form.error_type === 'Untagged')) {
+    if (isLosingTrade(trade) && (!form.error_category || form.error_category === 'Untagged')) {
       missingFields.push('Error Type');
     }
 
@@ -3830,7 +3838,8 @@
       note: trimToNull(form.note),
     };
     if (isLosingTrade(trade)) {
-      payload.error_type = form.error_type || 'Untagged';
+      payload.error_category = form.error_category || 'Untagged';
+      payload.error_subtype = form.error_subtype || null;
     }
     return payload;
   }
@@ -3886,9 +3895,16 @@
     const mindsetOpts = ['<option value="">—</option>'].concat(MINDSET_OPTIONS.map((value) => `
       <option value="${value}" ${value === annoForm.mindset ? 'selected' : ''}>${value}</option>
     `)).join('');
-    const errorOpts = ERROR_TYPES.map((value) => `
-      <option value="${value}" ${value === annoForm.error_type ? 'selected' : ''}>${value}</option>
+    const errorCategoryOpts = ERROR_CATEGORIES.map((cat) => `
+      <option value="${cat}" ${cat === annoForm.error_category ? 'selected' : ''}>${cat}</option>
     `).join('');
+    const currentCategorySubtypes = ERROR_TAXONOMY[annoForm.error_category] || [];
+    const showSubtype = currentCategorySubtypes.length > 0;
+    const errorSubtypeOpts = showSubtype
+      ? ['<option value="">—</option>'].concat(currentCategorySubtypes.map((sub) => `
+          <option value="${sub}" ${sub === annoForm.error_subtype ? 'selected' : ''}>${sub}</option>
+        `)).join('')
+      : '';
     const planButtons = PLAN_ADHERENCE_OPTIONS.map((value) => {
       const activeClass = value === annoForm.plan_adherence
         ? `td-anno-btn-active-${value.toLowerCase()}`
@@ -3952,7 +3968,8 @@
         ${showErrorType ? `<div class="td-anno-field">
           <span class="td-anno-field-label${errorLabelClass}">Error Type<span class="td-anno-required">*</span></span>
           <div class="td-anno-field-body">
-            <select class="td-anno-select${errorInputClass}" id="td-anno-error">${errorOpts}</select>
+            <select class="td-anno-select${errorInputClass}" id="td-anno-error-category">${errorCategoryOpts}</select>
+            ${showSubtype ? `<select class="td-anno-select" id="td-anno-error-subtype" style="margin-top:4px">${errorSubtypeOpts}</select>` : ''}
             ${missingFieldSet.has('Error Type') ? '<div class="td-anno-field-hint">Choose the main mistake before moving on.</div>' : ''}
           </div>
         </div>` : ''}
@@ -4008,11 +4025,18 @@
       renderAnnoModal();
     });
 
-    const errorSelect = overlay.querySelector('#td-anno-error');
-    if (errorSelect) {
-      errorSelect.addEventListener('change', (e) => {
-        annoForm.error_type = e.target.value;
+    const errorCategorySelect = overlay.querySelector('#td-anno-error-category');
+    if (errorCategorySelect) {
+      errorCategorySelect.addEventListener('change', (e) => {
+        annoForm.error_category = e.target.value;
+        annoForm.error_subtype = null; // clear subtype when category changes
         renderAnnoModal();
+      });
+    }
+    const errorSubtypeSelect = overlay.querySelector('#td-anno-error-subtype');
+    if (errorSubtypeSelect) {
+      errorSubtypeSelect.addEventListener('change', (e) => {
+        annoForm.error_subtype = e.target.value || null;
       });
     }
 
